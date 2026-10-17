@@ -33,6 +33,10 @@ interface WordDetailViewProps {
   preferredAccent: 'UK' | 'US';
   onUpdateNotes: (wordId: string, notes: string) => void;
   onBack?: () => void;
+  /** 是否还有上一步可回退（false 时按钮置灰） */
+  canGoBack?: boolean;
+  /** 上一页的描述文字（如「生词本」「apple」） */
+  backLabel?: string;
   onSelectWord?: (word: string) => void;
   /** 词条语言：es 时发音走西语 TTS、meta 显示词频 */
   lang?: DictionaryLang;
@@ -49,6 +53,8 @@ export const WordDetailView: React.FC<WordDetailViewProps> = ({
   preferredAccent,
   onUpdateNotes,
   onBack,
+  canGoBack = false,
+  backLabel,
   onSelectWord,
   lang = 'en',
 }) => {
@@ -206,17 +212,25 @@ export const WordDetailView: React.FC<WordDetailViewProps> = ({
 
   return (
     <article id="word-detail-container" className="w-full max-w-4xl mx-auto bg-white border border-zinc-200/90 rounded-2xl p-4 sm:p-5 md:p-6 shadow-xs transition-all">
-      {/* Return to previous view banner if opened from notebook or review */}
+      {/* 返回上一步：回到点击当前词之前的页面与滚动位置 */}
       {onBack && (
-        <div className="pb-3 mb-3 border-b border-zinc-100 flex items-center justify-between">
+        <div className="pb-3 mb-3 border-b border-zinc-100 flex items-center justify-between gap-2">
           <button
             onClick={onBack}
-            className="inline-flex items-center gap-1.5 text-xs font-medium text-zinc-600 hover:text-zinc-950 px-2.5 py-1.5 rounded-lg bg-zinc-50 hover:bg-zinc-100 border border-zinc-200/80 transition-colors touch-manipulation min-h-[36px]"
+            disabled={!canGoBack}
+            title={canGoBack ? '回到上一页（保留原滚动位置）' : '没有更早的记录了'}
+            className={`inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg border transition-colors touch-manipulation min-h-[36px] ${
+              canGoBack
+                ? 'text-zinc-600 hover:text-zinc-950 bg-zinc-50 hover:bg-zinc-100 border-zinc-200/80'
+                : 'text-zinc-300 bg-zinc-50/50 border-zinc-200/50 cursor-not-allowed'
+            }`}
           >
-            <ArrowLeft className="w-4 h-4 text-zinc-600" />
-            <span>返回生词本</span>
+            <ArrowLeft className="w-4 h-4" />
+            <span>返回上一步</span>
           </button>
-          <span className="text-[11px] text-zinc-400">词汇详情与多词典聚合</span>
+          <span className="text-[11px] text-zinc-400 truncate">
+            {backLabel ? `上一页：${backLabel}` : '词汇详情与多词典聚合'}
+          </span>
         </div>
       )}
 

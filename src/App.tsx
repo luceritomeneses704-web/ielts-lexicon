@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { WordItem, WordGroup, ViewMode, DictionaryLang } from './types/dictionary';
 import { IELTS_DICTIONARY } from './data/ieltsDictionary';
 import {
@@ -44,7 +44,6 @@ import { Check, ArrowLeft } from 'lucide-react';
 export default function App() {
   const [currentView, setCurrentView] = useState<ViewMode>('dict');
   const [selectedNotebookWord, setSelectedNotebookWord] = useState<WordItem | null>(null);
-  const [detailOrigin, setDetailOrigin] = useState<'dict' | 'notebook' | null>(null);
   const [savedWords, setSavedWords] = useState<WordItem[]>(() => {
     const list = getSavedWords();
     let hasChanges = false;
@@ -159,10 +158,75 @@ export default function App() {
     }
   };
 
+  // ---------------------------------------------------------------
+  // 导航历史：记录「进入某个词条之前」的页面、词条与滚动位置，
+  // 供详情卡底部「返回上一步」精确回退（而不是一路退回列表顶部）。
+  // ---------------------------------------------------------------
+  interface NavSnapshot {
+    view: ViewMode;
+    notebookWord: WordItem | null;
+    word: WordItem | null;
+    scrollY: number;
+    label: string;
+  }
+  const [navStack, setNavStack] = useState<NavSnapshot[]>([]);
+  const navStackRef = useRef<NavSnapshot[]>([]);
+  const writeNavStack = useCallback((next: NavSnapshot[]) => {
+    navStackRef.current = next;
+    setNavStack(next);
+  }, []);
+
+  // 当前状态镜像，供 pushNavSnapshot 读取最新值（避免闭包过期）
+  const navStateRef = useRef({
+    view: currentView,
+    notebookWord: selectedNotebookWord,
+    word: currentWord,
+  });
+  useEffect(() => {
+    navStateRef.current = { view: currentView, notebookWord: selectedNotebookWord, word: currentWord };
+  }, [currentView, selectedNotebookWord, currentWord]);
+
+  /** 进入新词条前调用：快照当前页面、词条与滚动位置 */
+  const pushNavSnapshot = useCallback((label?: string) => {
+    const s = navStateRef.current;
+    const autoLabel = s.notebookWord
+      ? `生词本 · ${s.notebookWord.word}`
+      : s.view === 'notebook'
+      ? '生词本'
+      : s.word?.word || '词典';
+    const snapshot: NavSnapshot = {
+      view: s.view,
+      notebookWord: s.notebookWord,
+      word: s.word,
+      scrollY: typeof window !== 'undefined' ? window.scrollY : 0,
+      label: label || autoLabel,
+    };
+    const next = [...navStackRef.current, snapshot];
+    // 最多保留 20 步，避免无限增长
+    writeNavStack(next.slice(-20));
+  }, [writeNavStack]);
+
+  /** 回到上一步：恢复页面 + 词条 + 原滚动位置 */
+  const handleGoBackOneStep = useCallback(() => {
+    const stack = navStackRef.current;
+    if (stack.length === 0) return;
+    const target = stack[stack.length - 1];
+    writeNavStack(stack.slice(0, -1));
+    setCurrentView(target.view);
+    setSelectedNotebookWord(target.notebookWord);
+    setCurrentWord(target.word);
+    // 等 DOM 渲染完再恢复滚动位置
+    setTimeout(() => {
+      window.scrollTo({ top: target.scrollY, behavior: 'auto' });
+    }, 90);
+  }, [writeNavStack]);
+
+  const canGoBack = navStack.length > 0;
+  const backLabel = navStack.length > 0 ? navStack[navStack.length - 1].label : undefined;
+
   // Helper to immediately transition and scroll to the word detail card
   const scrollToWordDetail = useCallback(() => {
     setCurrentView('dict');
-    setDetailOrigin(null);
     setSelectedNotebookWord(null);
     // Smoothly scroll to the detail container if not in view
     setTimeout(() => {
@@ -179,6 +243,9 @@ export default function App() {
       const clean = rawWord.trim();
       if (!clean) return;
       const lang = currentDictionary;
+
+      // 进入新词条前先记下当前位置，供「返回上一步」还原
+      pushNavSnapshot();
 
       // 0. 词典词库按需加载（不阻塞首屏；西语词库 3.8MB 仅在需要时载入）
       if (lang === 'en') {
@@ -269,7 +336,7 @@ export default function App() {
       }
       scrollToWordDetail();
     },
-    [autoSave, activeGroupId, groups, scrollToWordDetail, showToast, currentDictionary]
+    [autoSave, activeGroupId, groups, scrollToWordDetail, showToast, currentDictionary, pushNavSnapshot]
   );
 
   // 切换词典：清空当前词条、持久化选择；切到西语时预加载词库
@@ -414,8 +481,9 @@ export default function App() {
         currentView={currentView}
         onSelectView={view => {
           setSelectedNotebookWord(null);
-          setDetailOrigin(null);
           setCurrentView(view);
+          // 顶部导航属于「重新开始」，清空返回历史避免跨页面跳回
+          if (view !== currentView) writeNavStack([]);
         }}
         savedCount={dictWords.length}
         autoSave={autoSave}
@@ -454,14 +522,9 @@ export default function App() {
                   onUpdateNotes={handleUpdateNotes}
                   onSelectWord={handleSearchWord}
                   lang={currentDictionary}
-                  onBack={
-                    detailOrigin === 'notebook'
-                      ? () => {
-                          setCurrentView('notebook');
-                          setDetailOrigin(null);
-                        }
-                      : undefined
-                  }
+                  canGoBack={canGoBack}
+                  backLabel={backLabel}
+                  onBack={canGoBack ? handleGoBackOneStep : undefined}
                 />
               </div>
             )}
@@ -512,7 +575,9 @@ export default function App() {
                     setSelectedNotebookWord(prev => (prev && prev.id === wordId ? { ...prev, notes } : prev));
                   }}
                   onSelectWord={handleSearchWord}
-                  onBack={() => setSelectedNotebookWord(null)}
+                  canGoBack={canGoBack}
+                  backLabel={backLabel}
+                  onBack={canGoBack ? handleGoBackOneStep : () => setSelectedNotebookWord(null)}
                   lang={selectedNotebookWord.lang || currentDictionary}
                 />
               </div>
@@ -522,6 +587,7 @@ export default function App() {
                 words={dictWords}
                 groups={groups}
                 onSelectWord={word => {
+                  pushNavSnapshot('生词本');
                   setSelectedNotebookWord(word);
                   setCurrentWord(word);
                 }}
@@ -530,6 +596,7 @@ export default function App() {
                 onDeleteWord={handleDeleteWord}
                 onDeleteMultiple={handleDeleteMultiple}
                 onEditWord={word => {
+                  pushNavSnapshot('生词本');
                   setSelectedNotebookWord(word);
                   setCurrentWord(word);
                 }}
