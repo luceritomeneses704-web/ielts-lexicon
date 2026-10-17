@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>牛津词典数据整合交付报告 — IELTS Lexicon</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Plus Jakarta Sans", sans-serif; background: #fafafa; color: #18181b; line-height: 1.65; padding: 40px 20px; }
+  .wrap { max-width: 860px; margin: 0 auto; }
+  .card { background: #fff; border: 1px solid #e4e4e7; border-radius: 16px; padding: 28px 32px; margin-bottom: 20px; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+  h1 { font-size: 24px; font-weight: 700; letter-spacing: -.02em; margin-bottom: 6px; }
+  .sub { color: #71717a; font-size: 13px; margin-bottom: 24px; }
+  h2 { font-size: 15px; font-weight: 700; margin: 26px 0 12px; display: flex; align-items: center; gap: 8px; }
+  h2:first-of-type { margin-top: 0; }
+  h2 .dot { width: 7px; height: 7px; border-radius: 2px; background: #1d4ed8; }
+  p, li { font-size: 13.5px; color: #3f3f46; }
+  ul { padding-left: 20px; } li { margin-bottom: 5px; }
+  code { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px; background: #f4f4f5; border: 1px solid #e4e4e7; border-radius: 5px; padding: 1px 6px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin: 14px 0; }
+  .stat { background: #fafafa; border: 1px solid #e4e4e7; border-radius: 12px; padding: 14px 16px; }
+  .stat b { display: block; font-size: 22px; font-weight: 700; letter-spacing: -.02em; }
+  .stat span { font-size: 11.5px; color: #71717a; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 8px; }
+  th { text-align: left; font-weight: 600; color: #71717a; padding: 8px 10px; border-bottom: 1px solid #e4e4e7; font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; }
+  td { padding: 8px 10px; border-bottom: 1px solid #f4f4f5; vertical-align: top; }
+  td:first-child { font-family: "JetBrains Mono", monospace; font-size: 11.5px; white-space: nowrap; }
+  .ok { color: #059669; font-weight: 600; }
+  .badge { display: inline-block; font-size: 10.5px; font-family: "JetBrains Mono", monospace; background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; border-radius: 999px; padding: 2px 10px; font-weight: 500; }
+  .flow { background: #fafafa; border: 1px solid #e4e4e7; border-radius: 12px; padding: 16px 18px; font-size: 12.5px; color: #3f3f46; margin-top: 10px; }
+  .flow b { color: #18181b; }
+  .note { background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px; padding: 12px 16px; font-size: 12.5px; color: #854d0e; margin-top: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <h1>牛津词典数据整合交付报告</h1>
+    <div class="sub">IELTS Lexicon · 雅思极简词典与生词本 &nbsp;·&nbsp; 2026-10-17 &nbsp;·&nbsp; <span class="badge">OALD 真实词库</span></div>
+
+    <h2><span class="dot"></span>一、交付概述</h2>
+    <p>已将 <code>DICT.zip</code>（牛津高阶英汉双解词典 OALD 风格语料，GB18030 编码、174 个文件、约 4 万词条）完整整合进 App，项目位于 <code>D:\ielts-lexicon</code>。整合遵循你选择的「TS 词库并入前端」路线：解析生成的紧凑词库作为<b>最低优先级兜底层</b>进入现有 <code>masterDictionaryMap</code> 查词体系，不覆盖既有精选词库，不改变三视图结构与生词本数据格式。</p>
+    <div class="grid">
+      <div class="stat"><b>38,954</b><span>词库条目（含 781 个别名）</span></div>
+      <div class="stat"><b>38,173</b><span>独立词头</span></div>
+      <div class="stat"><b>5,025</b><span>词头带派生词关联</span></div>
+      <div class="stat"><b>2,729</b><span>存根词条已关联基础词</span></div>
+    </div>
+
+    <h2><span class="dot"></span>二、整合架构</h2>
+    <div class="flow">
+      <b>DICT.zip</b>（GB18030 文本）→ <b>parse_oxford_dict.py</b>（词条切分 / 音标清洗 / 中英切分 / 繁简转换 / 派生词计算）→ <b>oxfordLexicon.ts</b>（19.7MB 管道分隔紧凑数据）→ <b>dictionaryService</b> 最低优先级种子化 → <b>masterDictionaryMap</b><br>
+      → 查词 Tier 1 命中（findLocalWord）· suggest 前缀匹配（getInstantSuggestions）· 生词本/闪卡自动打通（既有 recordWordLookup 链路）
+    </div>
+    <ul>
+      <li><b>精选词库永远优先</b>：剑桥雅思真题库、AWL、OFFLINE_LEXICON 等已覆盖的词不被牛津数据覆盖</li>
+      <li><b>浏览器组件零影响</b>：<code>getAllMasterWords()</code> 过滤牛津来源，「雅思核心词库速览」与「主词库」两个浏览器行为与性能不变</li>
+      <li><b>suggest 性能优化</b>：改为直接迭代 Map，避免每次输入全量拷贝 4.2 万条目</li>
+    </ul>
+
+    <h2><span class="dot"></span>三、四项功能落地情况</h2>
+    <table>
+      <tr><th>功能</th><th>实现</th><th>状态</th></tr>
+      <tr><td>真实词条详情</td><td>详情页新增「牛津高阶英汉双解词典 · 真实词条」专区：完整义项全文（编号义项 + 英英释义 + 中文释义 + 行内例句）、词典例句、OALD 真实数据标识；头部音标/释义/英英释义均取自真实数据</td><td class="ok">✓</td></tr>
+      <tr><td>生词本/闪卡打通</td><td>牛津词条以标准 WordItem 入图，查词即自动存入生词本（autoSave 链路），可直接进入闪卡复习；搭配取自真实例句</td><td class="ok">✓</td></tr>
+      <tr><td>派生词关联展示</td><td>词条底部「派生词」chips（如 abandon → abandoned / abandonment），点击直接跳转查词</td><td class="ok">✓</td></tr>
+      <tr><td>suggest 补全纳入</td><td>3.8 万牛津词头全部进入本地补全候选，输入 abaf 即提示 abaft 等纯牛津词</td><td class="ok">✓</td></tr>
+    </table>
+
+    <h2><span class="dot"></span>四、文件变更清单</h2>
+    <table>
+      <tr><th>文件</th><th>变更</th></tr>
+      <tr><td>src/data/oxfordLexicon.ts</td><td><b>新增</b>（自动生成，19.7MB，38,954 条）</td></tr>
+      <tr><td>scripts/parse_oxford_dict.py</td><td><b>新增</b> 词典解析器（可重复执行再生成）</td></tr>
+      <tr><td>scripts/smoke_oxford.ts</td><td><b>新增</b> 运行时冒烟测试（29 项断言）</td></tr>
+      <tr><td>src/services/dictionaryService.ts</td><td>牛津层种子化 + getAllMasterWords 过滤 + suggest 优化</td></tr>
+      <tr><td>src/components/WordDetailView.tsx</td><td>新增牛津真实词条专区（义项/例句/派生词）</td></tr>
+      <tr><td>src/services/dictionaryAggregatorService.ts</td><td>多词典聚合的「牛津」卡片有真实数据时展示真实义项</td></tr>
+      <tr><td>src/types/dictionary.ts</td><td>新增 OxfordRealEntry 类型与 oxfordReal / derivedWords 字段</td></tr>
+      <tr><td>package.json</td><td>esbuild ^0.25.0 → ^0.28.0（修复 vite 8 依赖冲突）</td></tr>
+    </table>
+
+    <h2><span class="dot"></span>五、验证结果</h2>
+    <table>
+      <tr><th>检查项</th><th>结果</th></tr>
+      <tr><td>TypeScript 编译（tsc --noEmit）</td><td class="ok">0 错误</td></tr>
+      <tr><td>冒烟测试 smoke_oxford.ts</td><td class="ok">29/29 通过</td></tr>
+      <tr><td>生产构建 npm run build</td><td class="ok">成功（1.4s）</td></tr>
+      <tr><td>服务端点 /api/health · /suggest · /search</td><td class="ok">全部正常</td></tr>
+      <tr><td>数据质量抽检（音标/释义/例句/派生词）</td><td class="ok">通过</td></tr>
+    </table>
+
+    <h2><span class="dot"></span>六、启动方式</h2>
+    <p><code>cd D:\ielts-lexicon &amp;&amp; npm start</code>（端口 3000，Express + Vite 一体服务）。开发调试 <code>npm run dev</code>；类型检查 <code>npm run lint</code>。</p>
+
+    <div class="note"><b>注意事项：</b>① 采用 TS 词库路线后主 JS chunk 为 21.5MB（gzip 约 7.9MB），本地工具可正常使用；若未来要部署到线上并瘦身，可将词库改为 SQLite 后端方案（已评估过的备选路线）。② 音标保留牛津原记法（如 5beIbI; \`bebI），未做 IPA 转换以避免转换误差。③ 少量纯参见条目（约 700 条）无独立音标/释义，以「参见基础词」形式呈现。</div>
+  </div>
+</div>
+</body>
+</html>

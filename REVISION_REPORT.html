@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IELTS Lexicon 修订报告 — 2026-10-17</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #fafafa; color: #18181b; line-height: 1.7; padding: 40px 20px; }
+  .wrap { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 28px; margin-bottom: 6px; letter-spacing: -0.5px; }
+  .sub { color: #71717a; font-size: 13px; margin-bottom: 32px; }
+  .card { background: #fff; border: 1px solid #e4e4e7; border-radius: 14px; padding: 22px 24px; margin-bottom: 16px; }
+  .card h2 { font-size: 16px; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+  .num { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 7px; background: #18181b; color: #fff; font-size: 12px; font-weight: 600; flex-shrink: 0; }
+  .tag { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #f4f4f5; border: 1px solid #e4e4e7; color: #52525b; margin-left: auto; font-weight: 500; }
+  p, li { font-size: 13.5px; color: #3f3f46; }
+  ul { padding-left: 20px; margin-top: 6px; }
+  li { margin-bottom: 4px; }
+  code { background: #f4f4f5; padding: 1px 6px; border-radius: 5px; font-size: 12px; font-family: ui-monospace, "SF Mono", Consolas, monospace; }
+  .kv { display: grid; grid-template-columns: 110px 1fr; gap: 4px 14px; font-size: 13px; margin-top: 8px; }
+  .kv dt { color: #71717a; }
+  .kv dd { color: #27272a; }
+  .bar { height: 8px; background: #f4f4f5; border-radius: 99px; overflow: hidden; margin: 8px 0 4px; }
+  .bar i { display: block; height: 100%; border-radius: 99px; }
+  .ok { color: #059669; font-weight: 600; }
+  .note { background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px; padding: 12px 16px; font-size: 12.5px; color: #92400e; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>IELTS Lexicon 修订报告</h1>
+  <div class="sub">2026-10-17 · 五项修订全部完成 · tsc 零错误 · 冒烟测试 35/35 通过 · 生产构建成功</div>
+
+  <div class="card">
+    <h2><span class="num">1</span>首屏性能：21.5MB → 355KB<span class="tag">约 60 倍提升</span></h2>
+    <p>此前整个 App（含 20MB 牛津词库）打包为单个 JS，首屏要等 21.5MB 下载完才能渲染。现已拆分为按需加载：</p>
+    <div class="bar"><i style="width:2%;background:#18181b"></i></div>
+    <div class="kv">
+      <dt>首屏主包</dt><dd>355 KB（gzip 105 KB）— 仅含应用代码与小词库</dd>
+      <dt>词典库 chunk</dt><dd>1.14 MB（gzip 216 KB）— 精选词库 + 真经词库</dd>
+      <dt>剑桥真题库</dt><dd>478 KB（gzip 126 KB）</dd>
+      <dt>牛津词库</dt><dd>20.3 MB — <b>仅在实际查词时按需拉取</b>，后台静默加载不阻塞界面</dd>
+    </div>
+    <p style="margin-top:8px">实现：<code>vite.config.ts</code> manualChunks 拆分 + <code>ensureOxfordReady()</code> 动态 import，首屏 paint 完成后 300ms 自动触发后台加载。</p>
+  </div>
+
+  <div class="card">
+    <h2><span class="num">2</span>雅思真题词库扩充：《雅思词汇真经》真实数据<span class="tag">+3321 词</span></h2>
+    <p>从你提供的 <code>词汇表List.pdf</code>（63 页、21 个主题章节）完整解析并清洗，生成 <code>src/data/ieltsZhenjingLexicon.ts</code>：</p>
+    <ul>
+      <li><b>3321 个去重词条</b>，覆盖自然地理 / 植物研究 / 动物保护 / 太空探索 / 学校教育 / 科技发明 / 文化历史 / 身心健康 等 21 类雅思常考话题</li>
+      <li>数据处理：词头断裂恢复（<code>thermodyna</code> → <code>thermodynamics</code>）、三列交错串词截断、音标剥离、词性归一、符号清洗</li>
+      <li>词库优先级：精选剑桥真题库 &gt; 真经词库 &gt; 牛津兜底层，互不覆盖</li>
+      <li>新增 <code>scripts/parse_zhenjing.py</code> 解析器，PDF 更新后可一键重跑</li>
+    </ul>
+    <div class="note">说明：PDF 实际去重后约 3300 词（书名"6600 词"含大量跨章重复与派生形）。原 App 词库 + 牛津 3.9 万词 + 真经 3321 词后，本地可查词条合计约 <b>4.6 万</b>，另有后端 SQLite 17.4 万词库兜底。</div>
+  </div>
+
+  <div class="card">
+    <h2><span class="num">3</span>释义精简：只留核心信息</h2>
+    <p>详情页按"简洁明了"重构：</p>
+    <ul>
+      <li><b>删除</b>：考点透析长文分析、题型标签堆叠、"已查 N 次"计数、官方参考译文大段包装框、同反义词大标题区</li>
+      <li><b>保留并强化</b>：词头 + 音标 + 发音按钮、主中文释义（大字号）、真题例句（句子高亮 + 译文 + 朗读）、牛津真实义项、派生词 chips、核心搭配、学习笔记</li>
+      <li>英文定义降级为浅色小字（有才显示，不抢焦点）</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2><span class="num">4</span>发音：去掉英音/美音切换，只保留读音</h2>
+    <ul>
+      <li>删除顶栏的 <code>UK / US</code> 口音切换按钮</li>
+      <li>发音按钮文案由"发音 (UK)"改为"<b>发音</b>"，点击即朗读（固定英音）</li>
+      <li>例句、搭配、闪卡中的朗读功能全部保留</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2><span class="num">5</span>词组 / 句子输入 → 自动在线翻译</h2>
+    <p>输入框检测到多词词组或句子（含空格多实词 / 长度超 24 字符 / 含句中标点）时，自动走整句翻译而不是单词查询：</p>
+    <div class="kv">
+      <dt>翻译链路</dt><dd>MyMemory 在线 API → Lingva 公共实例 → <b>本地词库逐词降级</b>（离线可用）</dd>
+      <dt>降级示例</dt><dd><code>renewable energy sources</code> → "可再生的；可持续替代的 · 能源,精力 · 输入源；发起者"</dd>
+      <dt>结果呈现</dt><dd>词条卡片展示原文 + 译文，标注"在线翻译 · 英译中"，可存入生词本</dd>
+      <dt>单词不受影响</dt><dd>单词输入仍走原有 0ms 本地命中链路</dd>
+    </div>
+    <div class="note">在线翻译依赖公共免费 API。你的电脑网络正常时会优先使用在线引擎（整句翻译质量更高）；网络不可达时自动降级为本地词库逐词翻译，保证功能永远可用。</div>
+  </div>
+
+  <div class="card">
+    <h2><span class="num">6</span>桌面端留白收紧</h2>
+    <ul>
+      <li>主体内容区间距 <code>py-8 → py-6</code>，卡片间距 <code>space-y-6 → space-y-5</code></li>
+      <li>详情页内边距 <code>md:p-9 → md:p-6</code>，各分区间距 <code>my-6 → my-4</code></li>
+      <li>移动端（手机）布局与触控尺寸完全不变</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>✅ 验证结果</h2>
+    <div class="kv">
+      <dt>类型检查</dt><dd><span class="ok">tsc --noEmit 零错误</span></dd>
+      <dt>冒烟测试</dt><dd><span class="ok">35/35 通过</span>（牛津解析、查词链路、suggest、派生词、词组检测、真经词条）</dd>
+      <dt>生产构建</dt><dd><span class="ok">成功</span>（1.5s，首屏 355KB）</dd>
+      <dt>API 验证</dt><dd><span class="ok">全部通过</span>（health / dict/search / dict/suggest / translate）</dd>
+      <dt>启动方式</dt><dd>双击桌面「雅思极简词典.bat」，服务已在运行中也可直接访问 <code>http://localhost:3000</code></dd>
+    </div>
+  </div>
+</div>
+</body>
+</html>

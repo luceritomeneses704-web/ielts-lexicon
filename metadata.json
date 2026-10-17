@@ -1,0 +1,7 @@
+{
+  "name": "IELTS Lexicon - 雅思极简词典与生词本",
+  "description": "极简雅思查词与记忆工具，提供毫秒级极速查词、纯白优雅排版、雅思真题例句解析，以及具备自动记忆与增删整理功能的生词本。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

@@ -1,0 +1,12 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+
+# 大体积本地数据（可由 scripts/ 从 D:\spanish_data-master.zip 重新生成）
+dict.db
+scripts/*.json
