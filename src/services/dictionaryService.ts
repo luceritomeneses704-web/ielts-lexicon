@@ -339,6 +339,41 @@ function esLookup(key: string, note: string): { item: WordItem; note: string } |
   return null;
 }
 
+/**
+ * 西语固定搭配查询（纯客户端，静态托管无后端时也能用）：
+ * 在词条的 phrases / collocations 中查找完全匹配的短语，
+ * 命中则返回该词条（词头替换为短语本身），用于 tener hambre、hacer falta 等。
+ */
+export function findSpanishPhrase(query: string): WordItem | null {
+  const q = query.trim().toLowerCase();
+  if (!q || !/\s/.test(q)) return null;
+  const qNorm = esStripAccents(q);
+
+  for (const w of spanishDictionaryMap.values()) {
+    const list = w.phrases && w.phrases.length > 0
+      ? w.phrases
+      : (w.collocations || []).map(c => [c.phrase, c.translation] as [string, string]);
+    for (const [ph, zh] of list) {
+      if (!ph) continue;
+      // 去掉语法占位符（如 "tener que + infinitivo" 的 "+ infinitivo"）
+      const cleanPh = ph.replace(/\s*\+\s*[a-z]+$/i, '').trim();
+      if (esStripAccents(cleanPh.toLowerCase()) === qNorm) {
+        return {
+          ...w,
+          id: `es_phrase_${q.replace(/\s+/g, '_')}`,
+          word: ph,
+          // 短语自身的中文含义优先于动词释义（tener hambre → 饥饿，而非「有；拥有」）
+          chineseTranslation: (zh && /[一-龥]/.test(zh)) ? zh : (w.chineseTranslation || ''),
+          translation: (zh && !/[一-龥]/.test(zh)) ? zh : w.translation,
+          isInflectedForm: false,
+          inflectionNote: undefined,
+        };
+      }
+    }
+  }
+  return null;
+}
+
 export function resolveSpanishInflection(word: string): WordItem | null {
   const clean = word.trim().toLowerCase();
 
@@ -1192,10 +1227,13 @@ export function findLocalWord(word: string, lang: DictionaryLang = 'en'): WordIt
     // Fall back to master dictionary
   }
 
-  // 2. Spanish dictionary path（直接命中 → 屈折形式解析 → 模糊联想）
+  // 2. Spanish dictionary path（短语 → 直接命中 → 屈折解析 → 模糊联想）
   if (lang === 'es') {
     const item = spanishDictionaryMap.get(clean);
     if (item) return item;
+    // 多词输入优先当固定搭配查（tener hambre / hacer falta）
+    const phrase = findSpanishPhrase(clean);
+    if (phrase) return phrase;
     // 屈折形式：días → día / hablo → hablar / grandes → grande
     const resolved = resolveSpanishInflection(clean);
     if (resolved) return resolved;
