@@ -240,18 +240,26 @@ const DERIV_SUFFIXES = [
  * 用于中文检索排序时压派生词，避免 steepness 挤掉 steep。
  */
 function hasBaseFormInPool(word: string, pool: Map<string, WordItem>): boolean {
-  for (const suf of DERIV_SUFFIXES) {
-    if (word.length <= suf.length + 3 || !word.endsWith(suf)) continue;
-    const stem = word.slice(0, -suf.length);
-    if (pool.has(stem)) return true;
-    // 双写辅音：running → run
-    if (stem.length > 3 && stem[stem.length - 1] === stem[stem.length - 2] && pool.has(stem.slice(0, -1))) {
-      return true;
+  // 逐层剥离派生后缀（affectingly → affecting → affect），最多 2 层
+  const strip = (w: string, depth: number): boolean => {
+    if (depth > 2 || w.length <= 3) return false;
+    for (const suf of DERIV_SUFFIXES) {
+      if (w.length <= suf.length + 2 || !w.endsWith(suf)) continue;
+      const stem = w.slice(0, -suf.length);
+      if (stem.length < 3) continue;
+      if (pool.has(stem)) return true;
+      // 双写辅音：running → run
+      if (stem[stem.length - 1] === stem[stem.length - 2] && pool.has(stem.slice(0, -1))) return true;
+      // e 脱落 / 还原：booking → booke → book，creation → create
+      if (pool.has(stem + 'e')) return true;
+      // y ↔ i 交替：happily → happi → happy
+      if (stem.endsWith('i') && pool.has(stem.slice(0, -1) + 'y')) return true;
+      // 继续往下剥
+      if (strip(stem, depth + 1)) return true;
     }
-    // e 脱落：booking → booke → book；creation → create
-    if (pool.has(stem + 'e')) return true;
-  }
-  return false;
+    return false;
+  };
+  return strip(word, 0);
 }
 
 /**
@@ -736,7 +744,16 @@ function cleanGloss(raw: string): string {
   while (g && '（(['.includes(g[g.length - 1])) g = g.slice(0, -1).trim();
   const openCnt = (g.match(/[（(]/g) || []).length;
   const closeCnt = (g.match(/[）)]/g) || []).length;
-  if (openCnt !== closeCnt) g = g.replace(/[（）()[\][］]/g, '');
+  // 括号数量不等、或出现「）…（」这种顺序错乱（如「作为职业的）工作（尤指…」）→ 全部去掉
+  let depth = 0;
+  let balanced = true;
+  for (const ch of g) {
+    if (ch === '（' || ch === '(') depth++;
+    else if (ch === '）' || ch === ')') { depth--; if (depth < 0) { balanced = false; break; } }
+  }
+  if (openCnt !== closeCnt || !balanced || depth !== 0) {
+    g = g.replace(/[（）()[\][］]/g, '');
+  }
   g = g.replace(/\s+/g, ' ').trim();
   if (cjkLen(g) < 2) return '';
   if (GLOSS_NOISE.has(g)) return '';
