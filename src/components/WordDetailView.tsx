@@ -8,6 +8,7 @@ import {
 } from '../services/dictionaryService';
 import { getCoreEssentialCollocations } from '../services/dictionaryAggregatorService';
 import { generateEnglishForms } from '../services/dictionaryService';
+
 import {
   Volume2,
   Bookmark,
@@ -22,6 +23,16 @@ import {
   X,
   MessageSquareQuote,
 } from 'lucide-react';
+
+/** 西语词条的英文 gloss 若只是词典元信息（given name / surname / letter b），
+ *  显示出来会与中文释义自相矛盾（中文说「星期日」、英文说 given name），直接不显示。 */
+const META_EN_RE = /^(?:a\s+)?(?:given name|surname|name|letter\b|abbreviation\b|diminutive of|augmentative of|feminine of|masculine of|plural of|singular of|alternative form of|synonym of|inflection of|participle of|gerund of|past participle of|present participle of)\s*$|^(?:the )?letter [a-z]\b/i;
+
+function isMetaEnglishGloss(t: string): boolean {
+  const s = (t || '').trim().replace(/\s*\([^)]*\)\s*$/, '');
+  return META_EN_RE.test(s);
+}
+
 
 interface WordDetailViewProps {
   word: WordItem;
@@ -428,7 +439,7 @@ export const WordDetailView: React.FC<WordDetailViewProps> = ({
           {zhText || word.translation}
         </div>
         {/* 西语词条另起一行小字展示英文释义（非中文），避免混入中文朗读 */}
-        {entryLang === 'es' && word.translation && (
+        {entryLang === 'es' && word.translation && !isMetaEnglishGloss(word.translation) && (
           <p className="text-xs text-zinc-400 leading-relaxed max-w-2xl font-sans">
             EN: {word.translation}
           </p>

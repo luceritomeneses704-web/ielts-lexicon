@@ -25,9 +25,10 @@ EC_FILE = ROOT / 'src' / 'data' / 'ecdictSupplement.ts'
 CJK = r'\u4e00-\u9fa5'
 
 sys.path.insert(0, str(Path(__file__).parent))
-from es_curated_zh import all_curated as _all_curated, META_GLOSS  # noqa: E402
+from es_curated_zh import all_curated as _all_curated, META_GLOSS, ENTRY_OVERRIDES  # noqa: E402
 
 CURATED = _all_curated()
+OVERRIDES = ENTRY_OVERRIDES
 
 
 # ---------------------------------------------------------------- 英汉词典
@@ -318,15 +319,33 @@ def main():
         r"englishDefinition: '((?:[^'\\]|\\.)*)'"
     )
 
-    stats = {'total': 0, 'kept': 0, 'curated': 0, 'filled': 0, 'miss': 0}
+    stats = {'total': 0, 'kept': 0, 'curated': 0, 'override': 0, 'filled': 0, 'miss': 0}
     misses = []
 
     def repl(m):
         word, es_pos, tr, zh, ed = m.group(1), m.group(2), m.group(3), m.group(4), m.group(5)
         stats['total'] += 1
+        key = word.lower().replace("\\'", "'")
 
-        # 1) 精校表最高优先：即使已有中文也用精校值覆盖（闭集词必须准确）
-        hit_curated = curated.get(word.lower().replace("\\'", "'"))
+        # 0) 整条覆盖：连 pos / 英文释义 / 中文一起改写
+        #    （domingo 这类源数据只剩 given name，只改中文会与英文自相矛盾）
+        ov = OVERRIDES.get(key)
+        if ov:
+            stats['override'] += 1
+            out = m.group(0)
+            if ov.get('pos'):
+                out = re.sub(r"pos: '(?:[^'\\]|\\.)*'",
+                             "pos: '" + ov['pos'].replace("'", "\\'") + "'", out, count=1)
+            if ov.get('translation'):
+                out = re.sub(r"translation: '(?:[^'\\]|\\.)*'",
+                             "translation: '" + ov['translation'].replace("'", "\\'") + "'", out, count=1)
+            if ov.get('chinese'):
+                out = re.sub(r"chineseTranslation: '(?:[^'\\]|\\.)*'",
+                             "chineseTranslation: '" + ov['chinese'].replace("'", "\\'") + "'", out, count=1)
+            return out
+
+        # 1) 精校表：即使已有中文也用精校值覆盖（闭集词必须准确）
+        hit_curated = curated.get(key)
         if hit_curated:
             stats['curated'] += 1
             return m.group(0).replace(
@@ -375,7 +394,7 @@ def main():
     ES_FILE.write_text(new_text, encoding='utf-8')
 
     print(f"\n词条总数 {stats['total']}")
-    print(f"  精校表覆盖   {stats['curated']}")
+    print(f"  整条覆盖     {stats['override']}")
     print(f"  保留原有中文 {stats['kept']}")
     print(f"  新补中文     {stats['filled']}")
     print(f"  未能补全     {stats['miss']}")

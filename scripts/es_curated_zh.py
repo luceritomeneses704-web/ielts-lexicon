@@ -114,11 +114,52 @@ META_GLOSS = [
 ]
 
 
+# ---------------- 整条覆盖（连英文释义与词性一起修） ----------------
+# 有些词在源数据里只剩「given name / surname」这类元信息 gloss，
+# 英文释义和词性都错了（domingo 被标成 prop、EN 写成 given name），
+# 只改中文会出现「中文说星期日、英文说 given name」的自相矛盾。
+# 这里给出完整字段：pos / translation(英文) / chinese
+ENTRY_OVERRIDES = {
+    # 星期
+    'lunes':      {'pos': 'n.', 'translation': 'Monday',    'chinese': '星期一'},
+    'martes':     {'pos': 'n.', 'translation': 'Tuesday',   'chinese': '星期二'},
+    'miércoles':  {'pos': 'n.', 'translation': 'Wednesday', 'chinese': '星期三'},
+    'jueves':     {'pos': 'n.', 'translation': 'Thursday',  'chinese': '星期四'},
+    'viernes':    {'pos': 'n.', 'translation': 'Friday',    'chinese': '星期五'},
+    'sábado':     {'pos': 'n.', 'translation': 'Saturday',  'chinese': '星期六'},
+    'domingo':    {'pos': 'n. & prop', 'translation': 'Sunday; also a given name (Domingo)',
+                   'chinese': '星期日；星期天（也作人名「多明戈」）'},
+
+    # 月份
+    'enero':      {'pos': 'n.', 'translation': 'January',   'chinese': '一月'},
+    'febrero':    {'pos': 'n.', 'translation': 'February',  'chinese': '二月'},
+    'marzo':      {'pos': 'n.', 'translation': 'March',     'chinese': '三月'},
+    'abril':      {'pos': 'n.', 'translation': 'April',     'chinese': '四月'},
+    'mayo':       {'pos': 'n.', 'translation': 'May',       'chinese': '五月'},
+    'junio':      {'pos': 'n.', 'translation': 'June',      'chinese': '六月'},
+    'julio':      {'pos': 'n.', 'translation': 'July',      'chinese': '七月'},
+    'agosto':     {'pos': 'n.', 'translation': 'August',    'chinese': '八月'},
+    'septiembre': {'pos': 'n.', 'translation': 'September', 'chinese': '九月'},
+    'setiembre':  {'pos': 'n.', 'translation': 'September', 'chinese': '九月'},
+    'octubre':    {'pos': 'n.', 'translation': 'October',   'chinese': '十月'},
+    'noviembre':  {'pos': 'n.', 'translation': 'November',  'chinese': '十一月'},
+    'diciembre':  {'pos': 'n.', 'translation': 'December',  'chinese': '十二月'},
+
+    # mingo：源数据只剩 "target ball"（滚球类游戏的目标球），补全词性与释义
+    'mingo':      {'pos': 'n.', 'translation': 'target ball (the jack in a bowling-type game)',
+                   'chinese': '目标球（滚球类游戏中作为目标的那个球）'},
+}
+
+
 def all_curated() -> dict:
     """合并所有精校表（后面的覆盖前面的）"""
     out = {}
     for tbl in (NUMEROS, COLORES, DIAS, MESES, ESTACIONES, PAISES, FAMILIA):
         out.update(tbl)
+    # 整条覆盖表里的中文也并入（保证与 DIAS/MESES 一致）
+    for w, o in ENTRY_OVERRIDES.items():
+        if o.get('chinese'):
+            out[w] = o['chinese']
     return out
 
 
