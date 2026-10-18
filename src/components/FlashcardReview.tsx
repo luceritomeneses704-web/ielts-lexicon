@@ -227,7 +227,7 @@ export const FlashcardReview: React.FC<FlashcardReviewProps> = ({
                 <Volume2 className="w-4 h-4" />
               </button>
             </div>
-            <p className="text-xs text-zinc-400 pt-3 sm:pt-4">点击翻转查看雅思真题例句与学术搭配...</p>
+            <p className="text-xs text-zinc-400 pt-3 sm:pt-4">{lang === 'es' ? '点击翻转查看西语例句与固定搭配...' : '点击翻转查看雅思真题例句与学术搭配...'}</p>
           </div>
         ) : (
           /* BACK SIDE: Meaning, Authentic Example, Collocations */
@@ -248,7 +248,7 @@ export const FlashcardReview: React.FC<FlashcardReviewProps> = ({
               <div className="p-3.5 sm:p-4 bg-zinc-50 border border-zinc-200/60 rounded-xl text-left max-w-xl mx-auto space-y-1.5">
                 <div className="flex items-center gap-1.5 text-[11px] font-semibold text-zinc-600">
                   <Quote className="w-3 h-3 text-zinc-400" />
-                  <span>{currentWord.examContextTag || '剑雅真题语境'}</span>
+                  <span>{currentWord.examContextTag || (lang === 'es' ? 'Tatoeba 例句' : '剑雅真题语境')}</span>
                 </div>
                 <p className="font-editorial text-sm sm:text-base text-zinc-800 leading-relaxed">
                   "{currentWord.example}"

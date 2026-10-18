@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { WordItem, WordGroup, FilterCategory, DictionaryLang } from '../types/dictionary';
 import { playPronunciation, normalizeCollocation } from '../services/dictionaryService';
 import {
@@ -62,6 +62,11 @@ export const VocabularyNotebook: React.FC<VocabularyNotebookProps> = ({
   lang = 'en',
 }) => {
   const [libraryMode, setLibraryMode] = useState<'my_notebook' | 'master_lexicon'>('my_notebook');
+
+  // 西语词典不提供「雅思真题词库全集」（英语雅思内容与西语学习无关）
+  useEffect(() => {
+    if (lang === 'es' && libraryMode === 'master_lexicon') setLibraryMode('my_notebook');
+  }, [lang, libraryMode]);
   const allMasterWords = useMemo(
     () => (lang === 'es' ? getAllSpanishWords() : getAllMasterWords()),
     [lang]
@@ -245,6 +250,7 @@ export const VocabularyNotebook: React.FC<VocabularyNotebookProps> = ({
         >
           我的生词本 ({words.length})
         </button>
+        {lang === 'en' && (
         <button
           onClick={() => setLibraryMode('master_lexicon')}
           className={`flex-1 py-2 px-3 rounded-lg text-xs sm:text-sm font-medium transition-all flex items-center justify-center gap-1.5 ${
@@ -256,6 +262,7 @@ export const VocabularyNotebook: React.FC<VocabularyNotebookProps> = ({
           <Sparkles className="w-3.5 h-3.5 text-amber-500" />
           <span>雅思真题词库全集 ({allMasterWords.length})</span>
         </button>
+        )}
       </div>
 
       {libraryMode === 'master_lexicon' ? (
@@ -544,7 +551,7 @@ export const VocabularyNotebook: React.FC<VocabularyNotebookProps> = ({
               autoFocus
               value={newGroupName}
               onChange={e => setNewGroupName(e.target.value)}
-              placeholder="输入生词本名称（如《经济学人》、某电影名或雅思真题18）..."
+              placeholder={lang === 'es' ? '输入生词本名称（如 动词短语、旅行、动词变位...）' : '输入生词本名称（如《经济学人》、某电影名或雅思真题18）...'}
               className="flex-1 min-w-[200px] px-3 py-1.5 text-xs bg-zinc-50 border border-zinc-300 rounded-lg focus:bg-white focus:border-zinc-900 focus:outline-none"
             />
             <div className="flex items-center gap-1.5 ml-auto">

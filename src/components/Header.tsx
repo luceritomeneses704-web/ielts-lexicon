@@ -75,20 +75,14 @@ export const Header: React.FC<HeaderProps> = ({
                     className={`w-full text-left px-3.5 py-2.5 flex items-start gap-2.5 transition-colors ${currentDictionary === 'en' ? 'bg-zinc-50' : 'hover:bg-zinc-50'}`}
                   >
                     <BookOpen className="w-4 h-4 text-zinc-600 shrink-0 mt-0.5" />
-                    <span className="min-w-0">
-                      <span className="block text-sm font-medium text-zinc-950">英语词典</span>
-                      <span className="block text-[11px] text-zinc-500 mt-0.5">雅思核心词库 · 牛津高阶 · 词汇真经</span>
-                    </span>
+                    <span className="text-sm font-medium text-zinc-950">英语词典</span>
                   </button>
                   <button
                     onClick={() => { onSelectDictionary('es'); setDictMenuOpen(false); }}
                     className={`w-full text-left px-3.5 py-2.5 flex items-start gap-2.5 transition-colors border-t border-zinc-100 ${currentDictionary === 'es' ? 'bg-zinc-50' : 'hover:bg-zinc-50'}`}
                   >
                     <Languages className="w-4 h-4 text-zinc-600 shrink-0 mt-0.5" />
-                    <span className="min-w-0">
-                      <span className="block text-sm font-medium text-zinc-950">西语词典</span>
-                      <span className="block text-[11px] text-zinc-500 mt-0.5">19,486 高频词 · 英文释义 · 例句对照</span>
-                    </span>
+                    <span className="text-sm font-medium text-zinc-950">西语词典</span>
                   </button>
                 </div>
               )}

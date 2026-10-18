@@ -220,7 +220,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
             autoFocus
             value={quickGroupName}
             onChange={e => setQuickGroupName(e.target.value)}
-            placeholder="如《经济学人》、电影名或剑雅18..."
+            placeholder={lang === 'es' ? '如 动词短语、旅行...' : '如《经济学人》、电影名或剑雅18...'}
             className="flex-1 min-w-[180px] px-2.5 py-1.5 text-xs bg-white border border-zinc-300 rounded-lg focus:outline-none focus:border-zinc-900"
           />
           <div className="flex items-center gap-1.5 shrink-0 ml-auto">
@@ -268,7 +268,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
             }
           }}
           onKeyDown={handleKeyDown}
-          placeholder="快速输入任意英文单词（如 serendipity, pragmatic, apple...）"
+          placeholder={lang === 'es' ? '输入西语单词' : '输入英语单词'}
           className="w-full pl-10 sm:pl-11 pr-24 py-3 sm:py-3.5 bg-white border border-zinc-200/90 hover:border-zinc-300 focus:border-zinc-900 focus:outline-none rounded-xl text-sm sm:text-base text-zinc-900 placeholder:text-zinc-400 font-sans shadow-sm transition-all"
         />
 
@@ -305,14 +305,9 @@ export const SearchBar: React.FC<SearchBarProps> = ({
           >
             <div className="flex items-center gap-2 min-w-0">
               <Globe className="w-4 h-4 text-emerald-600 shrink-0" />
-              <div className="flex flex-col min-w-0">
-                <span className="font-editorial text-sm sm:text-base font-semibold text-zinc-950 truncate">
-                  查词: “{query.trim()}”
-                </span>
-                <span className="text-[11px] text-zinc-500 truncate">
-                  内置76万词权威词库 · 5大高阶权威词典即时解析
-                </span>
-              </div>
+              <span className="font-editorial text-sm sm:text-base font-semibold text-zinc-950 truncate">
+                查词: “{query.trim()}”
+              </span>
             </div>
             <span className="text-[11px] text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded font-mono shrink-0">
               即时查词
