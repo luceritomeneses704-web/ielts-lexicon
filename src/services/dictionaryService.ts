@@ -1964,8 +1964,17 @@ export function findLocalWord(word: string, lang: DictionaryLang = 'en'): WordIt
     const resolved = resolveSpanishInflection(clean);
     if (resolved) return resolved;
     // 模糊联想（b/v、g/j、ll/y、c/s/z 同族，h 静默）
+    // 只接受「归一后首字母相同且长度接近」的结果——否则 minga 会被硬匹配成 mí（我），
+    // 给出一个自信但完全错误的释义，比查不到更糟。
     const fuzzy = esFuzzySearch(clean, 1);
-    return fuzzy[0] || null;
+    if (fuzzy.length > 0) {
+      const a = esNormalizeToClass(clean);
+      const b = esNormalizeToClass(fuzzy[0].word);
+      if (a.length >= 2 && b.length >= 2 && a[0] === b[0] && Math.abs(a.length - b.length) <= 2) {
+        return fuzzy[0];
+      }
+    }
+    return null;
   }
 
   // 4. Check master preloaded dictionary (IELTS + Cambridge + General Core)
