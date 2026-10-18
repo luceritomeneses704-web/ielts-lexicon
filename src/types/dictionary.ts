@@ -72,6 +72,8 @@ export interface WordItem {
   isInflectedForm?: boolean;
   /** 屈折说明，如「复数形式 (-s)」/「动词变位形式」 */
   inflectionNote?: string;
+  /** 用户实际输入的原词形（如 flirting），用于提示「flirting 是 flirt 的现在分词」 */
+  lookupForm?: string;
   /** 中文释义（西语词条由英文 gloss 反查英语词库得到；英语词条与 translation 相同） */
   chineseTranslation?: string;
 }

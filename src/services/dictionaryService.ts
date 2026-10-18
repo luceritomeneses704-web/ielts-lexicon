@@ -224,6 +224,266 @@ export function esNormalizeToClass(s: string): string {
  * - 归一码双向包含匹配（容忍用户多打/少打字符）排第三档
  *   限制：长度差 ≤2，避免过短 query 误中大量词
  */
+// ===============================================================
+// 英语词形变化（屈折）——正推生成 + 反推还原
+// ---------------------------------------------------------------
+// 词库只收录原形（flirt），但用户会输入 flirting / flirted / flirts。
+// 这里用规则实时推导，无需扩充数据：
+//   动词：三单 -s/-es、现在分词 -ing（去 e / 双写 / ie→y）、过去式 -ed
+//   名词：复数 -s/-es、辅音+y → -ies
+//   形容词：比较级 -er、最高级 -est
+// 反推时按候选原形命中词库，并标注「现在分词 / 过去式」等。
+// ===============================================================
+
+const EN_VOWELS = 'aeiou';
+const isVowel = (c: string) => EN_VOWELS.includes(c);
+
+/**
+ * 常见不规则动词过去式 / 过去分词（原形 → [过去式, 过去分词]）。
+ * 只收高频词；规则动词仍走 -ed 推导。
+ */
+const EN_IRREGULAR_VERBS: Record<string, [string, string]> = {
+  be: ['was', 'been'], have: ['had', 'had'], do: ['did', 'done'], say: ['said', 'said'],
+  go: ['went', 'gone'], get: ['got', 'got'], make: ['made', 'made'], know: ['knew', 'known'],
+  think: ['thought', 'thought'], take: ['took', 'taken'], see: ['saw', 'seen'],
+  come: ['came', 'come'], give: ['gave', 'given'], find: ['found', 'found'],
+  tell: ['told', 'told'], become: ['became', 'become'], leave: ['left', 'left'],
+  feel: ['felt', 'felt'], put: ['put', 'put'], bring: ['brought', 'brought'],
+  begin: ['began', 'begun'], keep: ['kept', 'kept'], hold: ['held', 'held'],
+  write: ['wrote', 'written'], stand: ['stood', 'stood'], hear: ['heard', 'heard'],
+  let: ['let', 'let'], mean: ['meant', 'meant'], set: ['set', 'set'], meet: ['met', 'met'],
+  run: ['ran', 'run'], pay: ['paid', 'paid'], sit: ['sat', 'sat'], speak: ['spoke', 'spoken'],
+  lead: ['led', 'led'], read: ['read', 'read'], grow: ['grew', 'grown'],
+  lose: ['lost', 'lost'], fall: ['fell', 'fallen'], send: ['sent', 'sent'],
+  build: ['built', 'built'], understand: ['understood', 'understood'],
+  draw: ['drew', 'drawn'], break: ['broke', 'broken'], spend: ['spent', 'spent'],
+  cut: ['cut', 'cut'], rise: ['rose', 'risen'], drive: ['drove', 'driven'],
+  buy: ['bought', 'bought'], wear: ['wore', 'worn'], choose: ['chose', 'chosen'],
+  eat: ['ate', 'eaten'], drink: ['drank', 'drunk'], sing: ['sang', 'sung'],
+  swim: ['swam', 'swum'], teach: ['taught', 'taught'], catch: ['caught', 'caught'],
+  fight: ['fought', 'fought'], throw: ['threw', 'thrown'], fly: ['flew', 'flown'],
+  forget: ['forgot', 'forgotten'], win: ['won', 'won'], sell: ['sold', 'sold'],
+  sleep: ['slept', 'slept'], show: ['showed', 'shown'], seek: ['sought', 'sought'],
+  bite: ['bit', 'bitten'], hide: ['hid', 'hidden'], ride: ['rode', 'ridden'],
+  shake: ['shook', 'shaken'], steal: ['stole', 'stolen'], stick: ['stuck', 'stuck'],
+  strike: ['struck', 'struck'], wake: ['woke', 'woken'], bear: ['bore', 'borne'],
+  beat: ['beat', 'beaten'], bend: ['bent', 'bent'], blow: ['blew', 'blown'],
+  deal: ['dealt', 'dealt'], dig: ['dug', 'dug'], feed: ['fed', 'fed'],
+  hang: ['hung', 'hung'], lend: ['lent', 'lent'], light: ['lit', 'lit'],
+  ring: ['rang', 'rung'], shoot: ['shot', 'shot'], sink: ['sank', 'sunk'],
+  spoil: ['spoilt', 'spoilt'], spread: ['spread', 'spread'], tear: ['tore', 'torn'],
+  wind: ['wound', 'wound'],
+};
+
+/** 常见不规则名词复数（单数 → 复数） */
+const EN_IRREGULAR_PLURALS: Record<string, string> = {
+  child: 'children', man: 'men', woman: 'women', person: 'people', foot: 'feet',
+  tooth: 'teeth', mouse: 'mice', goose: 'geese', ox: 'oxen',
+  leaf: 'leaves', life: 'lives', wife: 'wives', knife: 'knives', wolf: 'wolves',
+  half: 'halves', shelf: 'shelves', self: 'selves', thief: 'thieves', loaf: 'loaves',
+  crisis: 'crises', analysis: 'analyses', basis: 'bases', thesis: 'theses',
+  phenomenon: 'phenomena', criterion: 'criteria', datum: 'data', medium: 'media',
+  index: 'indices', appendix: 'appendices', cactus: 'cacti', fungus: 'fungi',
+};
+
+/** 反向索引：不规则过去式/分词 → 原形 */
+const EN_IRREGULAR_PAST_INV: Record<string, string> = (() => {
+  const m: Record<string, string> = {};
+  for (const [base, [past, pp]] of Object.entries(EN_IRREGULAR_VERBS)) {
+    if (!m[past]) m[past] = base;
+    if (!m[pp]) m[pp] = base;
+  }
+  return m;
+})();
+
+/** 反向索引：不规则复数 → 单数 */
+const EN_IRREGULAR_PLURAL_INV: Record<string, string> = (() => {
+  const m: Record<string, string> = {};
+  for (const [sg, pl] of Object.entries(EN_IRREGULAR_PLURALS)) m[pl] = sg;
+  return m;
+})();
+
+/** 是否「辅音+元音+辅音」结尾（用于判断是否双写末字母） */
+function endsCVC(w: string): boolean {
+  if (w.length < 3) return false;
+  const a = w[w.length - 3], b = w[w.length - 2], c = w[w.length - 1];
+  if (isVowel(a) || !isVowel(b) || isVowel(c)) return false;
+  // w/x/y 结尾不双写
+  return !'wxy'.includes(c);
+}
+
+/** 动词第三人称单数 */
+function verbS(w: string): string {
+  if (/(?:s|x|z|ch|sh|o)$/.test(w)) return w + 'es';
+  if (/[^aeiou]y$/.test(w)) return w.slice(0, -1) + 'ies';
+  return w + 's';
+}
+
+/** 动词现在分词 / 动名词 */
+function verbIng(w: string): string {
+  if (w.endsWith('ie')) return w.slice(0, -2) + 'ying';       // die → dying
+  if (w.endsWith('e') && !/(?:ee|ye|oe)$/.test(w)) return w.slice(0, -1) + 'ing';  // make → making
+  if (endsCVC(w) && w.length <= 6) return w + w[w.length - 1] + 'ing';  // stop → stopping
+  return w + 'ing';
+}
+
+/** 动词过去式 / 过去分词 */
+function verbEd(w: string): string {
+  const irr = EN_IRREGULAR_VERBS[w];
+  if (irr) return irr[0];                                      // make → made
+  if (w.endsWith('e')) return w + 'd';                         // like → liked
+  if (/[^aeiou]y$/.test(w)) return w.slice(0, -1) + 'ied';     // study → studied
+  if (endsCVC(w) && w.length <= 6) return w + w[w.length - 1] + 'ed'; // stop → stopped
+  return w + 'ed';
+}
+
+/** 名词复数 */
+function nounPlural(w: string): string {
+  const irr = EN_IRREGULAR_PLURALS[w];
+  if (irr) return irr;                                         // child → children
+  if (/(?:s|x|z|ch|sh)$/.test(w)) return w + 'es';
+  if (/[^aeiou]y$/.test(w)) return w.slice(0, -1) + 'ies';
+  if (/[^aeiou]o$/.test(w)) return w + 'es';
+  return w + 's';
+}
+
+/** 形容词比较级 / 最高级 */
+function adjEr(w: string): string {
+  if (w.endsWith('e')) return w + 'r';
+  if (/[^aeiou]y$/.test(w)) return w.slice(0, -1) + 'ier';
+  if (endsCVC(w) && w.length <= 6) return w + w[w.length - 1] + 'er';
+  return w + 'er';
+}
+function adjEst(w: string): string {
+  if (w.endsWith('e')) return w + 'st';
+  if (/[^aeiou]y$/.test(w)) return w.slice(0, -1) + 'iest';
+  if (endsCVC(w) && w.length <= 6) return w + w[w.length - 1] + 'est';
+  return w + 'est';
+}
+
+/**
+ * 正向生成一个词条的全部常见变形（用于详情页「变形」一栏展示）。
+ * 只处理纯字母单词；带连字符/空格的短语返回空数组。
+ */
+export function generateEnglishForms(word: string, pos: string): string[] {
+  const w = (word || '').toLowerCase().trim();
+  if (!/^[a-z]{2,}$/.test(w)) return [];
+  const p = (pos || '').toLowerCase();
+  const isVerb = /(^|[^a-z])v\./.test(p);
+  const isNoun = /(^|[^a-z])n\./.test(p);
+  const isAdj = /(^|[^a-z])adj\./.test(p);
+
+  const out: string[] = [];
+  const push = (f: string) => {
+    if (f && f !== w && !out.includes(f)) out.push(f);
+  };
+
+  if (isVerb) {
+    push(verbS(w));
+    push(verbIng(w));
+    push(verbEd(w));
+  }
+  if (isNoun) push(nounPlural(w));
+  if (isAdj) {
+    push(adjEr(w));
+    push(adjEst(w));
+  }
+  return out;
+}
+
+/**
+ * 反推：把 flirting / flirted / flirts / flirtatiously 还原成原形。
+ * 返回命中词库的原形词条，并带上升折类型说明。
+ */
+export function resolveEnglishInflection(query: string): WordItem | null {
+  const w = (query || '').toLowerCase().trim();
+  if (!/^[a-z]{3,}$/.test(w)) return null;
+
+  const dir = masterDictionaryMap.get(w);
+  if (dir) return dir;
+
+  const cands: Array<{ lemma: string; note: string }> = [];
+  const add = (lemma: string, note: string) => {
+    if (lemma.length >= 2 && !cands.some(c => c.lemma === lemma)) cands.push({ lemma, note });
+  };
+
+  // --- 不规则变化优先（made → make, children → child, ran → run）---
+  const irrPast = EN_IRREGULAR_PAST_INV[w];
+  if (irrPast) add(irrPast, '过去式/过去分词（不规则）');
+  const irrPlural = EN_IRREGULAR_PLURAL_INV[w];
+  if (irrPlural) add(irrPlural, '复数（不规则）');
+
+  // --- 现在分词 / 动名词 ---
+  if (w.endsWith('ing') && w.length > 4) {
+    const stem = w.slice(0, -3);
+    add(stem, '现在分词');
+    if (stem.endsWith('y')) add(stem.slice(0, -1) + 'ie', '现在分词');   // dying → die
+    if (stem.length >= 3 && stem[stem.length - 1] === stem[stem.length - 2]) {
+      add(stem.slice(0, -1), '现在分词');                                 // stopping → stop
+    }
+    add(stem + 'e', '现在分词');                                          // making → make
+  }
+
+  // --- 过去式 / 过去分词 ---
+  if (w.endsWith('ied') && w.length > 4) {
+    add(w.slice(0, -3) + 'y', '过去式/过去分词');                         // studied → study
+  }
+  if (w.endsWith('ed') && w.length > 3) {
+    const stem = w.slice(0, -2);
+    add(stem, '过去式/过去分词');
+    add(stem + 'e', '过去式/过去分词');                                   // liked → like
+    if (stem.length >= 3 && stem[stem.length - 1] === stem[stem.length - 2]) {
+      add(stem.slice(0, -1), '过去式/过去分词');                          // stopped → stop
+    }
+  }
+
+  // --- 三单 / 复数 ---
+  if (w.endsWith('ies') && w.length > 4) {
+    add(w.slice(0, -3) + 'y', '第三人称单数/复数');                       // studies → study
+  }
+  if (w.endsWith('es') && w.length > 3) {
+    add(w.slice(0, -2), '第三人称单数/复数');                             // boxes → box
+    add(w.slice(0, -1), '第三人称单数/复数');                             // likes → like
+  }
+  if (w.endsWith('s') && !w.endsWith('ss') && w.length > 3) {
+    add(w.slice(0, -1), '第三人称单数/复数');                             // flirts → flirt
+  }
+
+  // --- 副词 / 比较级 / 最高级 ---
+  if (w.endsWith('ly') && w.length > 4) {
+    add(w.slice(0, -2), '副词形式');
+  }
+  if (w.endsWith('ier') && w.length > 5) add(w.slice(0, -3) + 'y', '比较级');
+  if (w.endsWith('iest') && w.length > 6) add(w.slice(0, -4) + 'y', '最高级');
+  if (w.endsWith('est') && w.length > 5) {
+    add(w.slice(0, -3), '最高级');
+    const stem = w.slice(0, -3);
+    if (stem.length >= 3 && stem[stem.length - 1] === stem[stem.length - 2]) add(stem.slice(0, -1), '最高级');
+  }
+  if (w.endsWith('er') && w.length > 4) {
+    add(w.slice(0, -2), '比较级');
+    const stem = w.slice(0, -2);
+    if (stem.length >= 3 && stem[stem.length - 1] === stem[stem.length - 2]) add(stem.slice(0, -1), '比较级');
+    add(w.slice(0, -1), '比较级');
+  }
+
+  // 按词频/相关性挑选：优先能生成该变形回原形的候选
+  let best: WordItem | null = null;
+  let bestScore = -1;
+  for (const c of cands) {
+    const hit = masterDictionaryMap.get(c.lemma);
+    if (!hit) continue;
+    // 反向验证：原形确实能推出该变形，得分更高（避免 flirting → flirt 之外的误配）
+    const forms = generateEnglishForms(hit.word, hit.pos);
+    const score = forms.includes(w) ? 2 : 1;
+    if (score > bestScore) {
+      bestScore = score;
+      best = { ...hit, isInflectedForm: true, inflectionNote: c.note, lookupForm: w };
+    }
+  }
+  return best;
+}
+
 /** 是否包含中日韩字符（用于判断「中文搜英文」还是「英文搜中文」） */
 export function hasCJK(s: string): boolean {
   return new RegExp(`[${CJK_CHAR}]`).test(s || '');
@@ -525,7 +785,7 @@ export function resolveSpanishInflection(word: string): WordItem | null {
   for (const c of candidates) {
     const found = esLookup(c.lemma, c.note);
     if (found && (best === null || (found.item.frequencyRank ?? 1e9) < (best.frequencyRank ?? 1e9))) {
-      best = { ...found.item, isInflectedForm: true, inflectionNote: found.note };
+      best = { ...found.item, isInflectedForm: true, inflectionNote: found.note, lookupForm: clean };
     }
   }
   return best;
@@ -1471,6 +1731,13 @@ export function getInstantSuggestions(query: string, maxResults = 8, lang: Dicti
   }
 
   const combined = [...prefixMatches, ...containsMatches, ...translationMatches];
+
+  // 3) 屈折形式兜底：输入 flirting 时前缀匹配不到，这里把原形补进联想
+  if (combined.length === 0 && lang === 'en' && /^[a-z]{3,}$/.test(clean)) {
+    const inflected = resolveEnglishInflection(clean);
+    if (inflected) combined.push(inflected);
+  }
+
   return combined.slice(0, maxResults);
 }
 
@@ -1538,6 +1805,11 @@ export function findLocalWord(word: string, lang: DictionaryLang = 'en'): WordIt
     item.collocations = getCoreEssentialCollocations(item.collocations);
     return item;
   }
+
+  // 4.5 屈折形式反推：flirting → flirt / studied → study / children 不规则形另处理
+  //     （西语已在上面单独分支处理，这里只走英语）
+  const inflected = resolveEnglishInflection(clean);
+  if (inflected) return inflected;
 
   // 5. Check common English-Chinese glossary for an immediate synthesized match
   if (COMMON_EN_ZH_GLOSSARY[clean]) {

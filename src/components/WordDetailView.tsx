@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { WordItem, WordGroup, CollocationItem, DictionaryLang } from '../types/dictionary';
 import {
   playPronunciation,
@@ -7,6 +7,7 @@ import {
   esNormalizeToClass,
 } from '../services/dictionaryService';
 import { getCoreEssentialCollocations } from '../services/dictionaryAggregatorService';
+import { generateEnglishForms } from '../services/dictionaryService';
 import {
   Volume2,
   Bookmark,
@@ -71,6 +72,13 @@ export const WordDetailView: React.FC<WordDetailViewProps> = ({
     translation: string; pos: string;
   } | null>(null);
   const [isSpeakingZh, setIsSpeakingZh] = useState(false);
+
+  // 英语词形变化（三单 / 现在分词 / 过去式 / 复数 / 比较级），点击可查
+  const englishForms = useMemo(
+    () => (entryLang === 'en' ? generateEnglishForms(word.word, word.pos) : []),
+    [entryLang, word.word, word.pos],
+  );
+
   // 中文朗读文本：优先中文释义，其次例句中文译文
   const zhText = (() => {
     const t = (word.translation || '').trim();
@@ -400,13 +408,15 @@ export const WordDetailView: React.FC<WordDetailViewProps> = ({
           )}
         </div>
 
-      {/* 变形提示：命中 días / hablo 等屈折形式时告知对应原形 */}
+      {/* 变形提示：命中 flirting / días 等屈折形式时告知对应原形 */}
       {word.isInflectedForm && word.inflectionNote && (
         <div className="mt-2 flex items-center gap-1.5 text-xs text-amber-800 bg-amber-50/80 border border-amber-200/70 rounded-lg px-2.5 py-1.5">
           <MessageSquareQuote className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-          <span>
-            “{word.word}” 是 <span className="font-semibold">{word.word}</span> 的
-            {word.inflectionNote}，已为你显示原形释义
+          <span className="min-w-0">
+            <span className="font-mono font-semibold">{word.lookupForm || word.word}</span>
+            {' '}是{' '}
+            <span className="font-semibold">{word.word}</span>
+            {' '}的{word.inflectionNote}，已为你显示原形释义
           </span>
         </div>
       )}
@@ -427,6 +437,22 @@ export const WordDetailView: React.FC<WordDetailViewProps> = ({
       </div>
 
 
+
+      {/* 词形变化（英语）：三单 / 现在分词 / 过去式 / 复数 / 比较级，点击可直接查 */}
+      {entryLang === 'en' && englishForms.length > 0 && (
+        <div className="flex items-center gap-1.5 flex-wrap mt-2.5">
+          <span className="text-[11px] text-zinc-400 shrink-0">变形</span>
+          {englishForms.map(f => (
+            <button
+              key={f}
+              onClick={() => onSelectWord?.(f)}
+              className="text-xs text-sky-800 bg-sky-50 hover:bg-sky-100 border border-sky-200/70 rounded-md px-2 py-0.5 transition-colors touch-manipulation font-mono"
+            >
+              {f}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* 派生词（紧凑一排，点击可跳转查词） */}
       {word.derivedWords && word.derivedWords.length > 0 && (
