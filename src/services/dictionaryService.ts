@@ -1211,6 +1211,178 @@ function seedOxfordLayer(data: Record<string, string>) {
   return { added, phoneticsFilled, posFilled, zhFilled };
 }
 
+// ===============================================================
+// 补充词库（ECDICT，26 万词）——牛津查不到时才按需加载
+// ---------------------------------------------------------------
+// 牛津 3.9 万词覆盖不了生僻词 / 文学词 / 外来词（steppenwolf、limerence 等）。
+// ECDICT 提供 26 万条带音标、词性、中文释义与完整词形变化的数据，
+// 作为独立 chunk 动态加载，只有真正查不到时才付出这份流量。
+// ===============================================================
+
+const ecdictMap = new Map<string, WordItem>();
+
+export const ecdictLoadState: { status: 'idle' | 'loading' | 'ready' | 'failed'; count: number; ms?: number } = {
+  status: 'idle',
+  count: 0,
+};
+
+const ECDICT_SEP = '\u0001';
+
+/** 把 ECDICT 的 pos 占比串（n:10/v:90）转成「n. & v.」 */
+function ecdictPosFromShare(posRaw: string): string {
+  const shares = posRaw
+    .split('/')
+    .map(s => s.trim().split(':'))
+    .filter(a => a.length === 2)
+    .map(([k, v]) => ({ k: k.trim().toLowerCase(), v: Number(v) || 0 }))
+    .filter(x => x.v > 0)
+    .sort((a, b) => b.v - a.v);
+  if (shares.length === 0) return '';
+  const total = shares.reduce((s, x) => s + x.v, 0) || 1;
+  const nameMap: Record<string, string> = {
+    n: 'n.', v: 'v.', t: 'v.', i: 'v.', a: 'adj.', d: 'adv.', r: 'adv.',
+    p: 'prep.', c: 'conj.', u: 'pron.', m: 'num.', j: 'adj.',
+  };
+  const picked: string[] = [];
+  for (const s of shares) {
+    if (s.v / total < 0.2) continue;
+    const nm = nameMap[s.k];
+    if (nm && !picked.includes(nm)) picked.push(nm);
+  }
+  return picked.join(' & ');
+}
+
+/** 从中文释义开头的词性标记兜底推断词性（如「n. 书；vt. 预订」） */
+function ecdictPosFromTranslation(tr: string): string {
+  const found: string[] = [];
+  const re = /(?:^|[；;，,\s])(n|vt|vi|v|adj|adv|prep|conj|pron|num|art|interj)\./gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(tr)) !== null) {
+    let p = m[1].toLowerCase();
+    if (p === 'vt' || p === 'vi') p = 'v';
+    const nm = `${p}.`;
+    if (!found.includes(nm)) found.push(nm);
+  }
+  return found.join(' & ');
+}
+
+/** 清理 ECDICT 中文释义：去领域标记、去语源标记、去开头重复的词性前缀 */
+function cleanEcdictTranslation(tr: string): string {
+  let s = tr;
+  // 以下替换都先做包含判断——26 万词逐条跑全量正则会拖慢加载
+  // 开头的领域标记（网络: / 地名: / 医: ...）
+  if (s.indexOf('[') === 0 || /^[一-龥]{1,4}\s*[:：]/.test(s)) {
+    s = s.replace(/^(?:网络|地名|人名|医|计|化|法|经|力|机|电|生|数|物|农|商|军|体育|印刷)\s*[:：]\s*/, '');
+  }
+  // 词条中间夹带的 [心理] [医] 等领域标记
+  if (s.indexOf('[') >= 0) s = s.replace(/\[[^\]]{1,8}\]\s*/g, '');
+  // <德> <法> 等语源标记
+  if (s.indexOf('<') >= 0) s = s.replace(/<[^>]{1,6}>/g, '');
+  // 开头的词性标记（后面统一加一次，避免出现「n. n. 书」）
+  if (/^[a-z]{1,5}\s*\./i.test(s)) {
+    s = s.replace(/^(?:(?:n|vt|vi|v|adj|adv|prep|conj|pron|num|art|interj)\s*\.\s*)+/i, '');
+  }
+  // 折叠多余空白与分隔符
+  if (s.indexOf('  ') >= 0 || s.indexOf('\t') >= 0) s = s.replace(/\s+/g, ' ');
+  if (s.indexOf(';;') >= 0 || s.indexOf('；；') >= 0) s = s.replace(/[；;]{2,}/g, '；');
+  s = s.trim().replace(/[；;]\s*$/, '');
+  return s;
+}
+
+/** 解析 ECDICT 的 exchange 字段：i:flirting/p:flirted/d:flirted/3:flirts/s:flirts */
+function ecdictFormsFromExchange(ex: string): string[] {
+  if (!ex) return [];
+  const out: string[] = [];
+  for (const seg of ex.split('/')) {
+    const idx = seg.indexOf(':');
+    if (idx < 0) continue;
+    const key = seg.slice(0, idx).trim();
+    const val = seg.slice(idx + 1).trim();
+    // 只取词形变化（i/p/d/3/s/r/t），跳过 0: 原形与 1: 变体
+    if (!['i', 'p', 'd', '3', 's', 'r', 't'].includes(key)) continue;
+    if (val && !out.includes(val)) out.push(val);
+  }
+  return out.filter(v => /^[a-zA-Z][a-zA-Z'\- ]*$/.test(v));
+}
+
+/** 把一行 ECDICT 数据装进 ecdictMap */
+function seedEcdictLine(line: string): void {
+  if (!line) return;
+  const f = line.split(ECDICT_SEP);
+  if (f.length < 4) return;
+  const word = (f[0] || '').trim();
+  if (!word) return;
+  const key = word.toLowerCase();
+  if (ecdictMap.has(key)) return;
+
+  const ipa = oxfordPhoneticToIpa(f[1] || '');
+  const rawTranslation = f[3] || '';
+  const translation = cleanEcdictTranslation(rawTranslation);
+  if (!translation) return;
+
+  let pos = ecdictPosFromShare(f[2] || '');
+  // 从原始释义里读词性标记（清洗后标记已被移除）
+  if (!pos) pos = ecdictPosFromTranslation(rawTranslation);
+  if (!pos) pos = 'n.';
+
+  ecdictMap.set(key, {
+    id: `ecdict_${key}`,
+    word,
+    phonetic: ipa ? `/${ipa}/` : '',
+    audioUrl: `https://dict.youdao.com/dictvoice?audio=${encodeURIComponent(word)}&type=1`,
+    pos,
+    translation: `${pos} ${translation}`.slice(0, 220),
+    englishDefinition: '',
+    ieltsBand: 'Band 6.0',
+    topic: '学术教育',
+    example: '',
+    exampleTranslation: '',
+    collocations: [],
+    synonyms: [],
+    derivedWords: ecdictFormsFromExchange(f[4] || ''),
+    lookupCount: 1,
+    addedAt: Date.now(),
+    lastLookedUpAt: Date.now(),
+    mastered: false,
+    starred: false,
+    isCustom: true,
+    sourceBadge: 'ECDICT 补充词库',
+  });
+}
+
+let ecdictPromise: Promise<void> | null = null;
+
+/** 按需加载补充词库（牛津查不到时才触发） */
+export function ensureEcdictReady(): Promise<void> {
+  if (ecdictPromise) return ecdictPromise;
+  ecdictPromise = (async () => {
+    if (ecdictLoadState.status === 'ready') return;
+    ecdictLoadState.status = 'loading';
+    const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    try {
+      const mod = await import('../data/ecdictSupplement');
+      for (const line of mod.ECDICT_SUPPLEMENT_RAW.split('\n')) seedEcdictLine(line);
+      ecdictLoadState.status = 'ready';
+      ecdictLoadState.count = ecdictMap.size;
+      ecdictLoadState.ms = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0);
+    } catch (e) {
+      ecdictLoadState.status = 'failed';
+      // eslint-disable-next-line no-console
+      console.warn('[ielts-lexicon] 补充词库加载失败:', e);
+    }
+  })();
+  return ecdictPromise;
+}
+
+/** 在补充词库中查词（同步，需先 ensureEcdictReady） */
+export function findInEcdict(word: string): WordItem | null {
+  const key = (word || '').trim().toLowerCase();
+  if (!key) return null;
+  const direct = ecdictMap.get(key);
+  if (direct) return direct;
+  return null;
+}
+
 /** 牛津词库加载状态（供 UI 指示） */
 export const oxfordLoadState: { status: 'idle' | 'loading' | 'ready' | 'failed'; added: number; phoneticsFilled?: number; posFilled?: number; zhFilled?: number; ms?: number } = {
   status: 'idle',
@@ -1810,6 +1982,12 @@ export function findLocalWord(word: string, lang: DictionaryLang = 'en'): WordIt
   //     （西语已在上面单独分支处理，这里只走英语）
   const inflected = resolveEnglishInflection(clean);
   if (inflected) return inflected;
+
+  // 4.6 补充词库（ECDICT 26 万词）：仅在其已加载时生效，覆盖生僻词/文学词/外来词
+  if (ecdictMap.size > 0) {
+    const ec = ecdictMap.get(clean);
+    if (ec) return ec;
+  }
 
   // 5. Check common English-Chinese glossary for an immediate synthesized match
   if (COMMON_EN_ZH_GLOSSARY[clean]) {

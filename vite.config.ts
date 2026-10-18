@@ -25,6 +25,8 @@ export default defineConfig(() => {
       rollupOptions: {
         output: {
           manualChunks(id) {
+            // ECDICT 补充词库（26 万词）：独立 chunk，只有牛津查不到时才下载
+            if (id.includes('data/ecdictSupplement')) return 'ecdict-supplement';
             // 西语词库 3.8MB：仅在切换到西语词典时加载
             if (id.includes('data/spanishLexicon')) return 'spanish-lexicon';
             if (id.includes('data/oxfordLexicon')) return 'oxford-lexicon';

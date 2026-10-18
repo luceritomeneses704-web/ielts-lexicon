@@ -13,6 +13,8 @@ import {
   synthesizePhraseTranslation,
   searchByChinese,
   hasCJK,
+  ensureEcdictReady,
+  ecdictLoadState,
 } from './services/dictionaryService';
 import {
   getSavedWords,
@@ -307,7 +309,17 @@ export default function App() {
       }
 
       // 1. Instant local search (0ms)
-      const local = findLocalWord(clean, lang);
+      let local = findLocalWord(clean, lang);
+
+      // 1.5 本地未命中 → 按需加载 ECDICT 26 万词补充词库后重试
+      //     （只有真正查不到时才付这 8MB 流量，命中则命中过就不再下载）
+      if (!local && lang === 'en' && ecdictLoadState.status !== 'ready') {
+        setIsLoading(true);
+        await ensureEcdictReady();
+        setIsLoading(false);
+        local = findLocalWord(clean, lang);
+      }
+
       if (local) {
         setCurrentWord(local);
         if (autoSave) {
