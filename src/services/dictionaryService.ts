@@ -531,6 +531,66 @@ function hasBaseFormInPool(word: string, pool: Map<string, WordItem>): boolean {
  *   3. 释义包含查询
  *   同一档内：释义越短越靠前（更像该词的「主含义」），再做词频加权。
  */
+/**
+ * 英文 → 西语：按西语词条的英文 gloss 反查。
+ *
+ * 西语词条本身带 Wiktionary 的英文释义（translation / englishDefinition），
+ * 因此用户输入英文也能定位到对应西语词，实现「中文 → 英文 → 西语」的跨词典链路。
+ *
+ * 打分：gloss 整段完全相等 100 > 以查询开头 80 > 词边界完整匹配 60 > 包含 35；
+ * 同一档内词频越靠前越优先（frequencyRank 越小越常见）。
+ */
+export function searchSpanishByEnglish(query: string, limit = 12): WordItem[] {
+  const q = (query || '').trim().toLowerCase();
+  if (!q || hasCJK(q) || q.length < 2) return [];
+  if (spanishDictionaryMap.size === 0) return [];
+
+  // 去 to / a / the 前缀（"to eat" → eat）
+  const bare = q.replace(/^(?:to|a|an|the)\s+/, '');
+  // 词边界完整匹配只在「主含义区」内判定，
+  // 否则 garage (domestic storage for a car...) 会因为括号里提到 car 而混进来
+  const MAIN_ZONE = 40;
+  const wordRe = new RegExp(`(^|[^a-z])${escapeRegExp(bare)}([^a-z]|$)`, 'i');
+
+  type Hit = { item: WordItem; score: number };
+  const hits: Hit[] = [];
+
+  for (const w of spanishDictionaryMap.values()) {
+    let score = 0;
+    for (const src of [w.translation, w.englishDefinition]) {
+      if (!src) continue;
+      const gloss = src.toLowerCase().trim();
+      // 整段完全相等（"house" === "house"）
+      if (gloss === q) { score = Math.max(score, 100); break; }
+      // 主含义 = 第一个左括号之前的部分
+      //   "spain (a country in southern europe...)" → spain
+      //   "red (colour)"                            → red
+      //   "palma (a city and port...)"              → palma
+      const head = gloss.split('(')[0].replace(/[\s,;:.]+$/, '').trim();
+      if (head === q || head === bare) { score = Math.max(score, 100); break; }
+      // 逗号/分号分段后整段相等（"to eat, to consume" → eat）
+      const segs = gloss.split(/[,;]/).map(s => s.trim());
+      if (segs.some(s => s === q || s === bare)) { score = Math.max(score, 90); break; }
+      // 以查询开头
+      if (gloss.startsWith(bare) || gloss.startsWith(q)) { score = Math.max(score, 60); break; }
+      // 主含义区内的词边界完整匹配（"car" 不会命中 card / carpet / affection）
+      if (wordRe.test(gloss.slice(0, MAIN_ZONE))) { score = Math.max(score, 55); }
+    }
+    if (score === 0) continue;
+    // 词频加权：frequencyRank 越小越常见，加成越高
+    const freqBonus = w.frequencyRank ? Math.max(0, 20 - Math.log10(w.frequencyRank) * 3) : 0;
+    hits.push({ item: w, score: score + freqBonus });
+  }
+
+  hits.sort((a, b) => b.score - a.score || (a.item.frequencyRank || 1e9) - (b.item.frequencyRank || 1e9));
+  return hits.slice(0, limit).map(h => h.item);
+}
+
+/** 正则转义 */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 export function searchByChinese(
   query: string,
   lang: 'en' | 'es' = 'en',
@@ -1972,6 +2032,15 @@ export function findLocalWord(word: string, lang: DictionaryLang = 'en'): WordIt
       const b = esNormalizeToClass(fuzzy[0].word);
       if (a.length >= 2 && b.length >= 2 && a[0] === b[0] && Math.abs(a.length - b.length) <= 2) {
         return fuzzy[0];
+      }
+    }
+
+    // 跨词典跳转：输入是英文（如 house / to eat）时，按英文 gloss 反查西语词条
+    // 这样用户在「英语词典」页查到英文后，切到西语页仍可用英文找到对应西语词。
+    if (!hasCJK(clean)) {
+      const viaEnglish = searchSpanishByEnglish(clean, 1);
+      if (viaEnglish.length > 0) {
+        return { ...viaEnglish[0], isInflectedForm: true, inflectionNote: '英文对应词', lookupForm: clean };
       }
     }
     return null;

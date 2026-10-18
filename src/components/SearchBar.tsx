@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Search, X, CornerDownLeft, Folder, Plus, Globe, Sparkles } from 'lucide-react';
 import { WordItem, WordGroup, DictionaryLang } from '../types/dictionary';
-import { getInstantSuggestions, fetchRemoteSuggestions, esFuzzySearch, searchByChinese, hasCJK } from '../services/dictionaryService';
+import { getInstantSuggestions, fetchRemoteSuggestions, esFuzzySearch, searchByChinese, searchSpanishByEnglish, hasCJK } from '../services/dictionaryService';
 
 interface SearchBarProps {
   onSearch: (word: string) => void;
@@ -26,6 +26,8 @@ export const SearchBar: React.FC<SearchBarProps> = ({
   const [query, setQuery] = useState('');
   const [suggestions, setSuggestions] = useState<WordItem[]>([]);
   const [fuzzySuggestions, setFuzzySuggestions] = useState<WordItem[]>([]);
+  /** 当前建议列表是否来自「英文 → 西语」跨词典反查（用于面板提示） */
+  const [crossLangHit, setCrossLangHit] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState<number>(-1);
   const [isQuickCreatingGroup, setIsQuickCreatingGroup] = useState(false);
@@ -68,15 +70,22 @@ export const SearchBar: React.FC<SearchBarProps> = ({
       if (hasCJK(clean)) {
         setSuggestions(searchByChinese(clean, lang, 8));
         setFuzzySuggestions([]);
+        setCrossLangHit(false);
         setIsOpen(true);
         setSelectedIndex(-1);
         return;
       }
       const localResults = getInstantSuggestions(clean, 6, lang);
-      setSuggestions(localResults);
+      // 西语词典：西语词本身没命中时，按英文 gloss 反查（house → casa），
+      // 实现「中文 → 英文 → 西语」的跨词典链路
+      const viaEnglish = (lang === 'es' && localResults.length === 0 && !hasCJK(clean))
+        ? searchSpanishByEnglish(clean, 6)
+        : [];
+      setSuggestions(localResults.length > 0 ? localResults : viaEnglish);
+      setCrossLangHit(localResults.length === 0 && viaEnglish.length > 0);
       // 西语词典：模糊联想（b/v、g/j、ll/y、c/s/z 同族）——新手拼错仍能找到词
       if (lang === 'es') {
-        const exactHits = new Set(localResults.map(r => r.word.toLowerCase()));
+        const exactHits = new Set([...localResults, ...viaEnglish].map(r => r.word.toLowerCase()));
         const fuzzy = esFuzzySearch(clean, 6).filter(r => !exactHits.has(r.word.toLowerCase()));
         setFuzzySuggestions(fuzzy);
       } else {
@@ -172,6 +181,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
   const handleClear = () => {
     setQuery('');
     setSuggestions([]);
+    setCrossLangHit(false);
     setIsOpen(false);
     inputRef.current?.focus();
   };
@@ -266,10 +276,19 @@ export const SearchBar: React.FC<SearchBarProps> = ({
           onChange={handleChange}
           onFocus={() => {
             if (query.trim().length > 0) {
+              if (hasCJK(query)) {
+                setSuggestions(searchByChinese(query, lang, 8));
+                setFuzzySuggestions([]);
+                setCrossLangHit(false);
+                setIsOpen(true);
+                return;
+              }
               const base = getInstantSuggestions(query, 6, lang);
-              setSuggestions(base);
+              const viaEn = (lang === 'es' && base.length === 0) ? searchSpanishByEnglish(query, 6) : [];
+              setSuggestions(base.length > 0 ? base : viaEn);
+              setCrossLangHit(base.length === 0 && viaEn.length > 0);
               if (lang === 'es') {
-                const exactHits = new Set(base.map(r => r.word.toLowerCase()));
+                const exactHits = new Set([...base, ...viaEn].map(r => r.word.toLowerCase()));
                 setFuzzySuggestions(esFuzzySearch(query, 6).filter(r => !exactHits.has(r.word.toLowerCase())));
               }
               setIsOpen(true);
@@ -330,6 +349,13 @@ export const SearchBar: React.FC<SearchBarProps> = ({
           {hasCJK(query) && suggestions.length === 0 && (
             <div className="px-3.5 sm:px-4 py-3 text-xs text-zinc-500">
               未找到含「{query.trim()}」的词条，试试更短的中文关键词
+            </div>
+          )}
+
+          {/* 西语词典下用英文反查到西语词时，说明这一跳的来由 */}
+          {lang === 'es' && !hasCJK(query) && suggestions.length > 0 && crossLangHit && (
+            <div className="px-3.5 sm:px-4 py-2 text-[11px] text-sky-700 bg-sky-50/70 border-b border-sky-100">
+              英文 “{query.trim()}” 对应的西语词（由英文释义反查）
             </div>
           )}
 

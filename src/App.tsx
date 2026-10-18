@@ -322,6 +322,10 @@ export default function App() {
 
       if (local) {
         setCurrentWord(local);
+        // 跨词典命中时说明来由（英文 → 西语）
+        if (local.isInflectedForm && local.inflectionNote === '英文对应词') {
+          showToast(`英文 “${local.lookupForm || clean}” → 西语 ${local.word}`);
+        }
         if (autoSave) {
           const { list, isNew } = recordWordLookup(local, activeGroupId);
           setSavedWords(list);
