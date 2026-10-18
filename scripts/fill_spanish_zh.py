@@ -24,6 +24,11 @@ EC_FILE = ROOT / 'src' / 'data' / 'ecdictSupplement.ts'
 
 CJK = r'\u4e00-\u9fa5'
 
+sys.path.insert(0, str(Path(__file__).parent))
+from es_curated_zh import all_curated as _all_curated, META_GLOSS  # noqa: E402
+
+CURATED = _all_curated()
+
 
 # ---------------------------------------------------------------- 英汉词典
 def load_oxford() -> dict:
@@ -124,10 +129,11 @@ def polish_zh(zh: str) -> str:
     s = re.sub(r'\[[^\]]{1,8}\]\s*', '', zh)          # [计] [医] 等标记
     s = re.sub(r'<[^>]{1,6}>', '', s)                 # <德> 等语源标记
     s = re.sub(r'=>.*$', '', s)                       # 词典的「=> 参见」箭头
-    s = re.sub(r'(?:用法|释义)?见[a-zA-Z0-9_\u4e00-\u9fa5]{1,10}\s*$', '', s)  # 用法见name1
+    # 交叉引用（含结尾标点）：用法见name1. / 见词条 xxx / 参见 p.123
+    s = re.sub(r'(?:用法|释义)?见\s*[a-zA-Z0-9_\u4e00-\u9fa5]{1,12}\s*[.。]?\s*$', '', s)
     s = re.sub(r'^(?:(?:n|vt|vi|v|adj|adv|prep|conj|pron|num|art|interj)\s*\.\s*)+', '', s)
     # 词典里的交叉引用/说明性长句不是释义
-    if re.search(r'见词条|同上|参见|详细说明|用于构成|用以构成|参见插图', s):
+    if re.search(r'见词条|同上|参见|详细说明|用于构成|用以构成|参见插图|用法见', s):
         return ''
     s = re.sub(r'\s+', ' ', s).strip(' .,;:。；、')
     # 英文式的「A, B, C」列表改成顿号，并限制条数
@@ -144,24 +150,147 @@ def polish_zh(zh: str) -> str:
     if not parts:
         return ''
     out = '；'.join(parts[:2])
-    # 去掉末尾拖着的拉丁字母残渣（如「黄（色）的. =>illus」被截断后的尾巴）
+    # 去掉末尾拖着的拉丁字母残渣
     out = re.sub(r'[a-zA-Z][a-zA-Z .\'\-]*$', '', out).strip(' .,;:。；、')
-    # 中文太少说明是噪声
-    if len(re.findall(f'[{CJK}]', out)) < 2:
+    # 至少要有 1 个汉字（球 / 水 / 火 这种单字释义是合法的，
+    # 之前要求 ≥2 会把它们判废，转而落到更差的第二本词典上）
+    if len(re.findall(f'[{CJK}]', out)) < 1:
         return ''
     return out[:34]
 
 
-def first_zh(gloss: str, dicts: list) -> str:
+def meta_gloss_zh(gloss: str):
+    """gloss 若是「given name / surname / letter b」这类元信息，直接给中文。
+
+    返回 None 表示「不是元信息，继续走词典反查」；
+    返回 '' 表示「是元信息但无法给出有意义的释义，跳过」。
+    """
+    g = (gloss or '').strip().lower().strip('.')
+    if not g:
+        return None
+    m = re.match(r'^(?:the )?letter ([a-z]) (?:in the spanish alphabet|of the alphabet)$', g)
+    if m:
+        return f'字母 {m.group(1).upper()}'
+    for pat, zh in META_GLOSS:
+        if re.search(pat, g):
+            if zh is None:
+                return ''
+            return zh
+    return None
+
+
+POS_SEG_RE = re.compile(r'(?:n|vt|vi|v|adj|adv|prep|conj|pron|num|art|interj)\s*\.')
+
+# 西语词性 → 英汉词典里可接受的英文词性标记
+POS_ALLOW = {
+    'v.': {'v', 'vt', 'vi'},
+    'n.': {'n'},
+    'adj.': {'adj', 'a'},
+    'adv.': {'adv', 'd', 'r'},
+    'pron.': {'pron'},
+    'prep.': {'prep'},
+    'conj.': {'conj'},
+    'num.': {'num'},
+    'art.': {'art'},
+    'interj.': {'interj'},
+}
+
+
+def extract_by_pos(zh: str, es_pos: str, first_only: bool = False) -> str:
+    """从「n. 公园；v. 停车」这类多词性释义里，挑出与西语词性一致的那一段。
+
+    aparcar (v.) 的 gloss 是 to park，直接取 park 的第一义项会得到「公园」；
+    按词性挑就能拿到「停车」。
+    """
+    allow = POS_ALLOW.get((es_pos or '').strip())
+    if not allow:
+        return ''
+    segs, cur, last = [], '', 0
+    for m in POS_SEG_RE.finditer(zh):
+        if m.start() > last:
+            segs.append((cur, zh[last:m.start()]))
+        cur = m.group(0).replace(' ', '').rstrip('.')
+        last = m.end()
+    segs.append((cur, zh[last:]))
+    picked = []
+    for p, text in segs:
+        if p in allow:
+            t = polish_zh(text)
+            if t:
+                picked.append(t)
+    if not picked:
+        return ''
+    if first_only:
+        # 多词 gloss 只需最贴近的一个义项，避免「球、舞会、球状物」全搬过来
+        one = re.split(r'[;；]', picked[0])[0]
+        one = re.split(r'[、,]', one)[0]
+        one = re.sub(r'（[^）]*）|\([^)]*\)', '', one).strip(' 、,，')
+        return (one or picked[0])[:24]
+    return '；'.join(picked[:2])
+
+
+def lookup_one(word: str, dicts: list) -> str:
+    """精确查一个英文词，返回单义项中文（用于合成复合词）"""
+    w = word.lower().strip()
+    if len(w) < 2:
+        return ''
+    for d in dicts:
+        zh = d.get(w)
+        if not zh:
+            continue
+        p = polish_zh(zh)
+        if not p:
+            continue
+        first = re.split(r'[;；]', p)[0]
+        first = re.sub(r'（[^）]*）|\([^)]*\)', '', first).strip(' 、,，')
+        if first and re.fullmatch(r'[\u4e00-\u9fa5]{1,3}', first):
+            return first
+    return ''
+
+
+def first_zh(gloss: str, dicts: list, es_pos: str = '') -> str:
     """在英汉词典里为一条 gloss 找中文"""
+    words = [w for w in re.findall(r"[a-zA-Z][a-zA-Z'\-]*", gloss or '')
+             if w not in ('of', 'the', 'a', 'an', 'to', 'in', 'on', 'with', 'for', 'and', 'or')]
+    multiword = len(words) > 1
+
+    # 1) 双词复合优先：target ball → 目标球（比只给「球」更贴合原义）
+    #    注意 "to park" 这类会被 STOP 词过滤成单词，不会误走这里
+    if len(words) == 2 and not (words[0] in words[1] or words[1] in words[0]):
+        z1, z2 = lookup_one(words[0], dicts), lookup_one(words[1], dicts)
+        if z1 and z2 and z1 != z2:
+            merged = z1 + z2
+            # 半决赛 + 半决赛 这类重复要去掉
+            half = len(merged) // 2
+            if len(merged) % 2 == 0 and merged[:half] == merged[half:]:
+                return merged[:half]
+            return merged[:10]
+
+    # 2) 按词性对齐取义（to park + v. → 停车，而不是 公园）
+    for cand in gloss_variants(gloss):
+        for d in dicts:
+            zh = d.get(cand)
+            if not zh:
+                continue
+            by_pos = extract_by_pos(zh, es_pos, first_only=multiword)
+            if by_pos:
+                return by_pos[:30]
+
+    # 3) 常规反查
     for cand in gloss_variants(gloss):
         for d in dicts:
             zh = d.get(cand)
             if not zh:
                 continue
             polished = polish_zh(zh)
-            if polished:
-                return polished
+            if not polished:
+                continue
+            if multiword:
+                first = re.split(r'[;；]', polished)[0]
+                first = re.sub(r'（[^）]*）|\([^)]*\)', '', first).strip(' 、,，')
+                if first:
+                    return first[:24]
+            return polished
     return ''
 
 
@@ -178,20 +307,33 @@ def main():
 
     text = ES_FILE.read_text(encoding='utf-8')
 
+    # 人工精校表优先级最高（星期/月份/数字/颜色/国家/亲属称谓等闭集）
+    curated = CURATED
+
     # 逐个词条处理：只改 chineseTranslation 为空的那部分
     entry_re = re.compile(
-        r"'((?:[^'\\]|\\.)*)': \{ pos: '(?:[^'\\]|\\.)*', "
+        r"'((?:[^'\\]|\\.)*)': \{ pos: '((?:[^'\\]|\\.)*)', "
         r"translation: '((?:[^'\\]|\\.)*)', "
         r"chineseTranslation: '((?:[^'\\]|\\.)*)', "
         r"englishDefinition: '((?:[^'\\]|\\.)*)'"
     )
 
-    stats = {'total': 0, 'kept': 0, 'filled': 0, 'miss': 0}
+    stats = {'total': 0, 'kept': 0, 'curated': 0, 'filled': 0, 'miss': 0}
     misses = []
 
     def repl(m):
-        word, tr, zh, ed = m.group(1), m.group(2), m.group(3), m.group(4)
+        word, es_pos, tr, zh, ed = m.group(1), m.group(2), m.group(3), m.group(4), m.group(5)
         stats['total'] += 1
+
+        # 1) 精校表最高优先：即使已有中文也用精校值覆盖（闭集词必须准确）
+        hit_curated = curated.get(word.lower().replace("\\'", "'"))
+        if hit_curated:
+            stats['curated'] += 1
+            return m.group(0).replace(
+                f"chineseTranslation: '{zh}'",
+                "chineseTranslation: '" + hit_curated.replace("'", "\\'") + "'",
+                1)
+
         if zh.strip():
             stats['kept'] += 1
             return m.group(0)
@@ -204,9 +346,17 @@ def main():
 
         zh_parts = []
         for g in glosses:
-            z = first_zh(g, dicts)
+            # 2) 元信息 gloss（given name / surname / letter b）直接给中文
+            meta = meta_gloss_zh(g)
+            if meta is not None:
+                if meta and meta not in zh_parts:
+                    zh_parts.append(meta)
+                continue
+            # 3) 英汉词典反查
+            z = first_zh(g, dicts, es_pos)
             if z and z not in zh_parts:
                 zh_parts.append(z)
+
         if not zh_parts:
             stats['miss'] += 1
             if len(misses) < 40:
@@ -225,6 +375,7 @@ def main():
     ES_FILE.write_text(new_text, encoding='utf-8')
 
     print(f"\n词条总数 {stats['total']}")
+    print(f"  精校表覆盖   {stats['curated']}")
     print(f"  保留原有中文 {stats['kept']}")
     print(f"  新补中文     {stats['filled']}")
     print(f"  未能补全     {stats['miss']}")
