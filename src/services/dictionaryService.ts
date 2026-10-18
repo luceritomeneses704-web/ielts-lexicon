@@ -224,6 +224,106 @@ export function esNormalizeToClass(s: string): string {
  * - 归一码双向包含匹配（容忍用户多打/少打字符）排第三档
  *   限制：长度差 ≤2，避免过短 query 误中大量词
  */
+/** 是否包含中日韩字符（用于判断「中文搜英文」还是「英文搜中文」） */
+export function hasCJK(s: string): boolean {
+  return new RegExp(`[${CJK_CHAR}]`).test(s || '');
+}
+
+/** 派生词后缀 */
+const DERIV_SUFFIXES = [
+  'ation', 'ition', 'ness', 'ment', 'ity', 'ous', 'ive', 'able', 'ible',
+  'ful', 'less', 'ism', 'ist', 'ize', 'ise', 'ly', 'ed', 'ing', 'er', 'est', 's',
+];
+
+/**
+ * 判断某个词是否是词库中另一词条的派生形式（steeply ← steep）。
+ * 用于中文检索排序时压派生词，避免 steepness 挤掉 steep。
+ */
+function hasBaseFormInPool(word: string, pool: Map<string, WordItem>): boolean {
+  for (const suf of DERIV_SUFFIXES) {
+    if (word.length <= suf.length + 3 || !word.endsWith(suf)) continue;
+    const stem = word.slice(0, -suf.length);
+    if (pool.has(stem)) return true;
+    // 双写辅音：running → run
+    if (stem.length > 3 && stem[stem.length - 1] === stem[stem.length - 2] && pool.has(stem.slice(0, -1))) {
+      return true;
+    }
+    // e 脱落：booking → booke → book；creation → create
+    if (pool.has(stem + 'e')) return true;
+  }
+  return false;
+}
+
+/**
+ * 中文 → 英文查词：在词条的释义里反查。
+ *
+ * 打分优先级：
+ *   1. 释义的某个义项段与查询完全相等（最高）
+ *   2. 某个义项段以查询开头
+ *   3. 释义包含查询
+ *   同一档内：释义越短越靠前（更像该词的「主含义」），再做词频加权。
+ */
+export function searchByChinese(
+  query: string,
+  lang: 'en' | 'es' = 'en',
+  limit = 12,
+): WordItem[] {
+  const q = (query || '').trim();
+  if (!q || !hasCJK(q)) return [];
+
+  const pool = lang === 'es' ? spanishDictionaryMap : masterDictionaryMap;
+  if (pool.size === 0) return [];
+
+  type Hit = { item: WordItem; score: number; len: number };
+  const hits: Hit[] = [];
+  const seenWords = new Set<string>();
+
+  for (const w of pool.values()) {
+    const key = (w.word || '').toLowerCase();
+    if (!key || seenWords.has(key)) continue;
+
+    const zh = (w.chineseTranslation || '').trim();
+    const tr = (w.translation || '').trim();
+    // 英文词条的 translation 本身就是中文；西语词条的 translation 是英文，用 chineseTranslation
+    const primary = lang === 'es' ? zh : (hasCJK(tr) ? tr : zh);
+    if (!primary) continue;
+
+    // 去掉开头的词性前缀，便于整段比对
+    const body = primary.replace(/^[a-zA-Z.&\s]{1,40}?(?=[一-龥])/, '');
+    const segments = body.split(/[；;，,、/|]/).map(s => s.trim()).filter(Boolean);
+
+    let score = 0;
+    for (const seg of segments) {
+      const cleanSeg = seg.replace(/^[a-zA-Z.&\s]+/, '').trim();
+      if (!cleanSeg) continue;
+      if (cleanSeg === q) { score = Math.max(score, 100); break; }
+      if (cleanSeg.startsWith(q)) { score = Math.max(score, 80); break; }
+      if (cleanSeg.includes(q)) { score = Math.max(score, 55); }
+    }
+    if (score === 0 && body.includes(q)) score = 35;
+    if (score === 0) continue;
+
+    seenWords.add(key);
+    // 释义越短越可能是主含义
+    const lenPenalty = Math.min(body.length, 80) * 0.15;
+    // 派生词惩罚：steepness / steeply 抢不过原形 steep
+    const derivPenalty = hasBaseFormInPool(key, pool) ? 12 : 0;
+    // 词频加权（西语有 frequencyRank）
+    const rankBonus = lang === 'es' && w.frequencyRank
+      ? Math.max(0, 10 - Math.log10(w.frequencyRank) * 2)
+      : 0;
+    hits.push({
+      item: w,
+      score: score - lenPenalty - derivPenalty + rankBonus,
+      len: body.length,
+    });
+  }
+
+  hits.sort((a, b) => b.score - a.score || a.len - b.len);
+  return hits.slice(0, limit).map(h => h.item);
+}
+
+
 export function esFuzzySearch(query: string, maxResults = 8): WordItem[] {
   const cls = esNormalizeToClass(query.trim().toLowerCase());
   // 空码会命中一切（如字母 h 归一为 ‘’），必须排除；过短码无区分度
@@ -600,9 +700,173 @@ export function getAllSpanishWords(): WordItem[] {
 //    牛津层只兜底 curated 层未覆盖的词，保证既有功能行为不变。
 //    【性能优化】牛津词库 20MB 通过 dynamic import 按需加载，首屏 bundle 不打包，
 //    用户输入查询时后台异步加载（不阻塞 UI），加载完成后自动 seed 到 masterDictionaryMap。
+// ===============================================================
+// 词条质量修复：用牛津数据补全「词性不全 / 释义残缺」的词条
+// ---------------------------------------------------------------
+// 背景：雅思词汇真经等自制词库只给了一个词性和极简中文，
+// 例如 stuff 只标 n.（漏了 v.）、flat 释义带「dj/」脏前缀。
+// 牛津 OALD 数据完整（pos 用 & 连接全部词性，senses 含逐义项中文），
+// 因此对已存在的词条做「只增不减」的补全。
+// ===============================================================
+
+const CJK_CHAR = '\\u4e00-\\u9fa5';
+/** 中文串：以中文字符开头结尾，中间允许中文/顿号/逗号/分号/空格/各类括号 */
+const CJK_SPAN_RE = new RegExp(
+  `[（(]?[${CJK_CHAR}][${CJK_CHAR}、；，,;·\\s（）()\\[\\]［］]*(?:[${CJK_CHAR}）)\\]]|[${CJK_CHAR}])`,
+  'g'
+);
+/** 义项编号：行首或空白后的 1-2 位数字 + 空格 */
+const SENSE_NO_RE = /(?:^|(?<=[.\s]))\d{1,2}\s+/;
+/** 非释义噪声 */
+const GLOSS_NOISE = new Set([
+  '习语', '用法', '同上', '见上', '见词条', '反义词', '同义词', '派生词', '缩写', '简称',
+  '参见', '详见', '即', '等', '某物', '某人', '某事', '等等', '同上条', '同前', '变体', '异体',
+  '尤指', '尤用于', '常用于', '特指', '同上页', '见前', '见后', '同上所述', '参看', '同上页',
+]);
+
+function cjkLen(s: string): number {
+  return (s.match(new RegExp(`[${CJK_CHAR}]`, 'g')) || []).length;
+}
+
+/** 清洗单条中文释义：去掉悬挂括号、折叠空白、过滤语法标签 */
+function cleanGloss(raw: string): string {
+  let g = raw.trim();
+  g = g.replace(/^[（）()[\]［］、；，,;.。：:·\s]+/, '').replace(/[（）()[\]［］、；，,;.。：:·\s]+$/, '');
+  while (g && '）)]'.includes(g[0])) g = g.slice(1).trim();
+  while (g && '（(['.includes(g[g.length - 1])) g = g.slice(0, -1).trim();
+  const openCnt = (g.match(/[（(]/g) || []).length;
+  const closeCnt = (g.match(/[）)]/g) || []).length;
+  if (openCnt !== closeCnt) g = g.replace(/[（）()[\][］]/g, '');
+  g = g.replace(/\s+/g, ' ').trim();
+  if (cjkLen(g) < 2) return '';
+  if (GLOSS_NOISE.has(g)) return '';
+  return g.slice(0, 28);
+}
+
+/**
+ * 从牛津 senses 文本中提取每个词性块的中文释义串。
+ * 返回的数组下标与 pos 中以 ` & ` 分隔的词性顺序对应。
+ */
+export function extractOxfordChinese(senses: string): string[] {
+  if (!senses) return [];
+  const out: string[] = [];
+  for (const rawBlock of senses.split('｜')) {
+    // 习语 / 短语动词 / 用法说明不是释义，先切掉
+    const block = rawBlock.split(/(?:idm\b|phr v\b|习语|短语动词|用法说明)/)[0];
+    const glosses: string[] = [];
+    const seen = new Set<string>();
+    for (const part of block.split(SENSE_NO_RE)) {
+      if (!part) continue;
+      // 第一个冒号之后是例句
+      const head = part.split(/[:：]/)[0];
+      if (!new RegExp(`[${CJK_CHAR}]`).test(head)) continue;
+      const runs = (head.match(CJK_SPAN_RE) || []).map(cleanGloss).filter(Boolean);
+      if (runs.length === 0) continue;
+      // 去掉每条释义末尾的悬挂标点
+      const g = (runs[runs.length - 1] || '').replace(/[；;，,、]\s*$/g, '').trim();
+      if (g && !seen.has(g)) {
+        seen.add(g);
+        glosses.push(g);
+      }
+    }
+    out.push(glosses.slice(0, 4).join('；'));
+  }
+  return out;
+}
+
+/** 统计词性串里的词性个数（n. / v. / adj. ...） */
+function countPos(pos: string): number {
+  const s = (pos || '').toLowerCase();
+  let c = 0;
+  for (const p of ['adj', 'adv', 'prep', 'conj', 'pron', 'interj', 'aux', 'det', 'art', 'num', 'n', 'v']) {
+    const test = p === 'n'
+      ? /(^|[^a-z])n\./
+      : p === 'v'
+      ? /(^|[^a-z])v\./
+      : new RegExp(p.replace('.', '\\.') + '\\.');
+    if (test.test(s)) c++;
+  }
+  return c;
+}
+
+/** 清洗自制词库里的脏释义前缀，如「dj/ 扁平的」「V. 冒烟」「v 平原」 */
+function stripDirtyPrefix(s: string): string {
+  return s
+    .replace(/^\s*(?:dj|adj|adv|v|n|prep|conj|pron|num|art|interj)\s*[./、]?\s*/i, '')
+    .replace(/^\s*[a-zA-Z]{1,4}\s*[./]\s*/, '')
+    .trim();
+}
+
+/**
+ * 用牛津条目补全已存在的词条（只增不减，不破坏已有精选数据）。
+ * @returns 是否补全了词性 / 释义
+ */
+function upgradeFromOxford(
+  existing: WordItem,
+  entry: OxfordRealEntry
+): { pos: boolean; zh: boolean } {
+  let posChanged = false;
+  let zhChanged = false;
+
+  // ---- 1. 词性补全：牛津词性更全时合并 ----
+  const oxPos = (entry.pos || '').trim();
+  if (oxPos && countPos(oxPos) > countPos(existing.pos || '')) {
+    existing.pos = oxPos;
+    posChanged = true;
+  }
+
+  // ---- 2. 释义补全 ----
+  // 先把已有释义里的脏前缀与重复词性前缀剥掉
+  const posList = (entry.pos || '').split('&').map(p => p.trim()).filter(Boolean);
+  let zhCurrent = stripDirtyPrefix(existing.translation || '');
+
+  // 若释义以词性串开头（牛津生成的词条会这样），去掉重复部分
+  const posPrefix = (entry.pos || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (posPrefix) {
+    zhCurrent = zhCurrent.replace(new RegExp(`^${posPrefix}\\s*`), '').trim();
+  }
+
+  const blocks = extractOxfordChinese(entry.senses);
+  const oxGloss = blocks.filter(Boolean).join('；');
+  const existingCjk = cjkLen(zhCurrent);
+
+  // 脏数据判定：中文释义里混入了英文单词（如「暖和;变暖. warmth n.温暖热情」）
+  const hasEmbeddedEnglish = /[a-zA-Z]{3,}/.test(zhCurrent);
+
+  // 已有释义过短、含英文残留、或牛津能提供明显更多义项时，用牛津释义替换
+  if (oxGloss && (existingCjk < 6 || hasEmbeddedEnglish || oxGloss.length > zhCurrent.length * 1.6)) {
+    zhCurrent = oxGloss;
+    zhChanged = true;
+  } else {
+    // 保留原有释义，但去掉行内夹带的词性标记（如「…竞选；n. 跑步」）
+    const cleaned = zhCurrent
+      .replace(/(^|[；;，,]\s*)(?:n|v|adj|adv|prep|conj|pron|num|art|interj|aux|det)\.\s*/gi, '$1')
+      .replace(/[；;，,、]\s*$/g, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+    if (cleaned && cleaned !== zhCurrent) {
+      zhCurrent = cleaned;
+      zhChanged = true;
+    }
+  }
+
+  // ---- 3. 重组 translation：词性前缀 + 中文（去掉重复） ----
+  const finalPos = existing.pos || oxPos;
+  const composed = finalPos ? `${finalPos} ${zhCurrent}` : zhCurrent;
+  if (composed !== existing.translation) {
+    existing.translation = composed.slice(0, 160);
+    zhChanged = true;
+  }
+
+  return { pos: posChanged, zh: zhChanged };
+}
+
 function seedOxfordLayer(data: Record<string, string>) {
   let added = 0;
   let phoneticsFilled = 0;
+  let posFilled = 0;
+  let zhFilled = 0;
+
   for (const [key, raw] of Object.entries(data)) {
     const lower = key.toLowerCase();
     const entry = parseOxfordRaw(raw);
@@ -617,6 +881,10 @@ function seedOxfordLayer(data: Record<string, string>) {
         existing.phonetic = `/${ipa}/`;
         phoneticsFilled++;
       }
+      // 用牛津数据补全「词性不全 / 释义残缺」的词条（如 stuff 只有 n.、flat 的释义带脏前缀）
+      const up = upgradeFromOxford(existing, entry);
+      if (up.pos) posFilled++;
+      if (up.zh) zhFilled++;
       continue;
     }
 
@@ -663,11 +931,11 @@ function seedOxfordLayer(data: Record<string, string>) {
     });
     added++;
   }
-  return { added, phoneticsFilled };
+  return { added, phoneticsFilled, posFilled, zhFilled };
 }
 
 /** 牛津词库加载状态（供 UI 指示） */
-export const oxfordLoadState: { status: 'idle' | 'loading' | 'ready' | 'failed'; added: number; phoneticsFilled?: number; ms?: number } = {
+export const oxfordLoadState: { status: 'idle' | 'loading' | 'ready' | 'failed'; added: number; phoneticsFilled?: number; posFilled?: number; zhFilled?: number; ms?: number } = {
   status: 'idle',
   added: 0,
 };
@@ -683,10 +951,12 @@ export function ensureOxfordReady(): Promise<void> {
     try {
       // dynamic import：vite 构建时会自动拆分为独立 chunk（oxford-lexicon），首屏不打包
       const mod = await import('../data/oxfordLexicon');
-      const { added, phoneticsFilled } = seedOxfordLayer(mod.OXFORD_LEXICON);
+      const { added, phoneticsFilled, posFilled, zhFilled } = seedOxfordLayer(mod.OXFORD_LEXICON);
       oxfordLoadState.status = 'ready';
       oxfordLoadState.added = added;
       oxfordLoadState.phoneticsFilled = phoneticsFilled;
+      oxfordLoadState.posFilled = posFilled;
+      oxfordLoadState.zhFilled = zhFilled;
       oxfordLoadState.ms = Math.round(performance.now() - t0);
     } catch (e) {
       oxfordLoadState.status = 'failed';

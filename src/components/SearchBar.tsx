@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Search, X, CornerDownLeft, Folder, Plus, Globe, Sparkles } from 'lucide-react';
 import { WordItem, WordGroup, DictionaryLang } from '../types/dictionary';
-import { getInstantSuggestions, fetchRemoteSuggestions, esFuzzySearch } from '../services/dictionaryService';
+import { getInstantSuggestions, fetchRemoteSuggestions, esFuzzySearch, searchByChinese, hasCJK } from '../services/dictionaryService';
 
 interface SearchBarProps {
   onSearch: (word: string) => void;
@@ -64,6 +64,14 @@ export const SearchBar: React.FC<SearchBarProps> = ({
     setQuery(text);
     const clean = text.trim();
     if (clean.length > 0) {
+      // 中文输入：走「中文 → 英文/西语」反查，不做英文联想
+      if (hasCJK(clean)) {
+        setSuggestions(searchByChinese(clean, lang, 8));
+        setFuzzySuggestions([]);
+        setIsOpen(true);
+        setSelectedIndex(-1);
+        return;
+      }
       const localResults = getInstantSuggestions(clean, 6, lang);
       setSuggestions(localResults);
       // 西语词典：模糊联想（b/v、g/j、ll/y、c/s/z 同族）——新手拼错仍能找到词
@@ -304,15 +312,26 @@ export const SearchBar: React.FC<SearchBarProps> = ({
             className="w-full text-left px-3.5 sm:px-4 py-2.5 sm:py-3 flex items-center justify-between gap-3 bg-zinc-50/60 hover:bg-zinc-100/80 transition-colors border-b border-zinc-100 touch-manipulation"
           >
             <div className="flex items-center gap-2 min-w-0">
-              <Globe className="w-4 h-4 text-emerald-600 shrink-0" />
+              <Globe className={`w-4 h-4 shrink-0 ${hasCJK(query) ? 'text-amber-600' : 'text-emerald-600'}`} />
               <span className="font-editorial text-sm sm:text-base font-semibold text-zinc-950 truncate">
-                查词: “{query.trim()}”
+                {hasCJK(query) ? `中文查词: “${query.trim()}”` : `查词: “${query.trim()}”`}
               </span>
             </div>
-            <span className="text-[11px] text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded font-mono shrink-0">
-              即时查词
+            <span className={`text-[11px] px-2 py-0.5 rounded font-mono shrink-0 border ${
+              hasCJK(query)
+                ? 'text-amber-700 bg-amber-50 border-amber-200'
+                : 'text-emerald-700 bg-emerald-50 border-emerald-200'
+            }`}>
+              {hasCJK(query) ? '反查英文' : '即时查词'}
             </span>
           </button>
+
+          {/* 中文检索无结果提示 */}
+          {hasCJK(query) && suggestions.length === 0 && (
+            <div className="px-3.5 sm:px-4 py-3 text-xs text-zinc-500">
+              未找到含「{query.trim()}」的词条，试试更短的中文关键词
+            </div>
+          )}
 
           {suggestions.length > 0 && (
             <div className="max-h-60 sm:max-h-64 overflow-y-auto overscroll-contain">

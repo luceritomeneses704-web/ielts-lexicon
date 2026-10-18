@@ -11,6 +11,8 @@ import {
   isPhraseOrSentence,
   translateText,
   synthesizePhraseTranslation,
+  searchByChinese,
+  hasCJK,
 } from './services/dictionaryService';
 import {
   getSavedWords,
@@ -248,12 +250,36 @@ export default function App() {
       pushNavSnapshot();
 
       // 0. 词典词库按需加载（不阻塞首屏；西语词库 3.8MB 仅在需要时载入）
+      //    中文反查需要词库就绪，故此时等待加载完成；英文查词保持不等待
+      const cjkInput = hasCJK(clean);
       if (lang === 'en') {
-        void ensureOxfordReady();
+        if (cjkInput) await ensureOxfordReady();
+        else void ensureOxfordReady();
       } else if (spanishLoadState.status !== 'ready') {
         setIsLoading(true);
         await ensureSpanishReady();
         setIsLoading(false);
+      }
+
+      // 0.2 中文输入 → 反查英文/西语
+      if (cjkInput) {
+        const hits = searchByChinese(clean, lang, 1);
+        if (hits.length === 0) {
+          showToast(`词库中没有意为「${clean}」的词，换个更短的关键词试试`);
+          return;
+        }
+        const target = hits[0];
+        setCurrentWord(target);
+        if (autoSave) {
+          const { list, isNew } = recordWordLookup(target, activeGroupId);
+          setSavedWords(list);
+          if (isNew) {
+            const targetGroup = groups.find(g => g.id === activeGroupId)?.name || '默认生词本';
+            showToast(`已将 "${target.word}" 存入「${targetGroup}」`);
+          }
+        }
+        scrollToWordDetail();
+        return;
       }
 
       // 0.5 词组/句子检测：多词输入或含句中标点时自动走在线翻译（英→中）
